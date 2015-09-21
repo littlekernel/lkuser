@@ -4,7 +4,7 @@ OUTPUT_ARCH(arm)
 ENTRY(_start)
 SECTIONS
 {
-    . = 0x100000;
+    . = 0x50000000; /* XXX convenient spot for a VMM-equipped lk before proper user address space is implemented */
 
     _start = .;
 

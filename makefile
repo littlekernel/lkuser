@@ -27,7 +27,7 @@ GLOBAL_CFLAGS := --std=gnu99 -Werror-implicit-function-declaration -Wstrict-prot
 GLOBAL_CPPFLAGS := -fno-exceptions -fno-rtti -fno-threadsafe-statics
 GLOBAL_ASMFLAGS := -DASSEMBLY
 GLOBAL_LDFLAGS :=
-GLOBAL_INCLUDES := -I$(NEWLIB_INC_DIR)
+GLOBAL_INCLUDES := -I$(NEWLIB_INC_DIR) -Isys/lib/lkuser/include
 GLOBAL_LIBS := $(LIBC) $(LIBM)
 
 include arch/$(ARCH)/arch.mk

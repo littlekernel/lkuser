@@ -2,15 +2,21 @@
 #include <stdio.h>
 #include <sys/stat.h>
 
+#include <sys/lkuser_syscalls.h>
+
+static const struct lkuser_syscall_table *lk_syscalls;
+
 int main(void)
 {
     printf("Hello, World!\n");
 
-    return 0;
+    return 99;
 }
 
-void _start(void)
+void _start(const struct lkuser_syscall_table *syscalls)
 {
+    lk_syscalls = syscalls;
+
     int ret = main();
 
     exit(ret);
@@ -57,11 +63,11 @@ void *_sbrk(ptrdiff_t incr)
 
 int _write(int file, char *ptr, int len)
 {
-    return len;
+    return lk_syscalls->write(file, ptr, len);
 }
 
 void _exit(int arg)
 {
-    for (;;);
+    lk_syscalls->exit(arg);
 }
 
