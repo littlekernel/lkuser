@@ -1,3 +1,6 @@
 [submodule "lk"]
 	path = lk
 	url = https://github.com/travisg/lk.git
+[submodule "newlib"]
+	path = newlib
+	url = https://github.com/travisg/newlib.git
