@@ -22,37 +22,8 @@
  */
 #pragma once
 
-#include <list.h>
 #include <kernel/thread.h>
-#include <kernel/event.h>
-#include <assert.h>
-#include <lib/lkuser.h>
-#include <sys/lkuser_syscalls.h>
 
-typedef struct lkuser_state {
-    struct list_node node;
-
-    int retcode;
-    enum {
-        STATE_INITIAL,
-        STATE_RUNNING,
-        STATE_DEAD,
-    } state;
-    event_t event;
-
-    int (*entry)(const struct lkuser_syscall_table *table);
-
-    thread_t main_thread;
-    void *main_thread_stack;
-} lkuser_state_t;
-
-/* defined in syscalls.c */
-const struct lkuser_syscall_table lkuser_syscalls;
-
-static inline lkuser_state_t *get_lkuser_state(void)
-{
-    lkuser_state_t *s = (lkuser_state_t *)tls_get(TLS_ENTRY_LKUSER);
-    DEBUG_ASSERT(s);
-    return s;
-}
+/* called from thread_resched() to do any pending work on the lkuser subsystem */
+void lkuser_context_switch(thread_t *oldthread, thread_t *newthread);
 

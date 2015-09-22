@@ -41,6 +41,13 @@ void sys_exit(int retcode)
 {
     LTRACEF("retcode %d\n", retcode);
 
+    lkuser_state_t *s = get_lkuser_state();
+
+    // XXX check that we're the last thread in this process
+    s->state = STATE_DEAD;
+    s->retcode = retcode;
+    event_signal(&s->event, true);
+
     thread_exit(retcode);
 }
 

@@ -21,6 +21,7 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 #include "lkuser_priv.h"
+#include <lib/lkuser.h>
 
 #include <trace.h>
 #include <stdio.h>
@@ -29,7 +30,9 @@
 #include <list.h>
 #include <kernel/vm.h>
 #include <kernel/thread.h>
+#include <kernel/mutex.h>
 #include <err.h>
+#include <lib/cksum.h>
 #include <lib/elf.h>
 #include <lib/bio.h>
 #include <sys/lkuser_syscalls.h>
@@ -38,6 +41,11 @@
 
 // default virtio device to try to load from
 static const char *bio_device = "virtio0";
+
+struct list_node proc_list = LIST_INITIAL_VALUE(proc_list);
+static mutex_t proc_lock = MUTEX_INITIAL_VALUE(proc_lock);
+
+static void lkuser_reap(void);
 
 static ssize_t elf_read_hook_bio(struct elf_handle *handle, void *buf, uint64_t offset, size_t len)
 {
@@ -112,6 +120,11 @@ static int lkuser_start_routine(void *arg)
 {
     lkuser_state_t *state = (lkuser_state_t *)arg;
 
+    /* set our per-thread pointer */
+    __tls_set(TLS_ENTRY_LKUSER, (uintptr_t)state);
+
+    state->state = STATE_RUNNING;
+
     LTRACEF("calling into binary at %p\n", state->entry);
     int err = state->entry(&lkuser_syscalls);
     LTRACEF("binary returned %d\n", err);
@@ -119,7 +132,7 @@ static int lkuser_start_routine(void *arg)
     return err;
 }
 
-status_t lkuser_start_binary(void *entry)
+status_t lkuser_start_binary(void *entry, bool wait)
 {
     LTRACEF("entry %p\n", entry);
 
@@ -131,6 +144,7 @@ status_t lkuser_start_binary(void *entry)
     }
 
     state->entry = entry;
+    event_init(&state->event, false, 0);
 
     /* create a stack for the new thread */
     status_t err = vmm_alloc(vmm_get_kernel_aspace(), "lkuser_stack", PAGE_SIZE, &state->main_thread_stack, PAGE_SIZE_SHIFT, 0, 0);
@@ -145,11 +159,51 @@ status_t lkuser_start_binary(void *entry)
 
     thread_detach(&state->main_thread);
 
+    /* add the process to the list */
+    mutex_acquire(&proc_lock);
+    list_add_head(&proc_list, &state->node);
+    mutex_release(&proc_lock);
+
     /* resume */
     LTRACEF("resuming thread\n");
     thread_resume(&state->main_thread);
 
+    if (wait) {
+        event_wait(&state->event);
+
+        TRACEF("process stopped, retcode %d\n", state->retcode);
+    }
+
     return NO_ERROR;
+}
+
+static void lkuser_reap(void)
+{
+    mutex_acquire(&proc_lock);
+
+    lkuser_state_t *found = NULL;
+    lkuser_state_t *temp;
+    list_for_every_entry(&proc_list, temp, lkuser_state_t, node) {
+        if (temp->state == STATE_DEAD) {
+            list_delete(&temp->node);
+            found = temp;
+            break;
+        }
+    }
+
+    mutex_release(&proc_lock);
+
+    if (found) {
+        TRACEF("going to reap %p\n", temp);
+
+        /* free the stack and memory the loaded binary was using */
+        vmm_free_region(vmm_get_kernel_aspace(), (vaddr_t)temp->entry);
+        vmm_free_region(vmm_get_kernel_aspace(), (vaddr_t)temp->main_thread_stack);
+
+        event_destroy(&temp->event);
+
+        free(temp);
+    }
 }
 
 #if defined(WITH_LIB_CONSOLE)
@@ -164,7 +218,8 @@ notenoughargs:
         printf("not enough arguments:\n");
 usage:
         printf("%s load\n", argv[0].str);
-        printf("%s run\n", argv[0].str);
+        printf("%s run [&]\n", argv[0].str);
+        printf("%s reap\n", argv[0].str);
         return -1;
     }
 
@@ -178,8 +233,16 @@ usage:
             return -1;
         }
 
-        status_t err = lkuser_start_binary(loaded_entry);
+        bool wait = true;
+        if (argc > 2 && !strcmp(argv[2].str, "&")) {
+            wait = false;
+        }
+
+        status_t err = lkuser_start_binary(loaded_entry, wait);
         printf("lkuser_start_binary() returns %d\n", err);
+        loaded_entry = NULL;
+    } else if (!strcmp(argv[1].str, "reap")) {
+        lkuser_reap();
     } else {
         printf("unrecognized subcommand\n");
         goto usage;
