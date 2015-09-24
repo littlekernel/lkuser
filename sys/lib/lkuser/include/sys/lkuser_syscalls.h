@@ -30,5 +30,7 @@ struct lkuser_syscall_table {
     int  (*read)(int file, char *ptr, int len);
     int  (*lseek)(int file, long pos, int whence);
     void *(*sbrk)(long incr);
+    int  (*sleep_sec)(unsigned long useconds);
+    int  (*sleep_usec)(unsigned long useconds);
 };
 

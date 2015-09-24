@@ -62,4 +62,14 @@ void _exit(int arg)
     lk_syscalls->exit(arg);
 }
 
+int usleep(useconds_t useconds)
+{
+    return lk_syscalls->sleep_usec(useconds);
+}
+
+int sleep(unsigned int seconds)
+{
+    return lk_syscalls->sleep_sec(seconds);
+}
+
 

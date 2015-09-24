@@ -151,6 +151,22 @@ void *sys_sbrk(long incr)
     return (err >= 0) ? ptr : NULL;
 }
 
+int sys_sleep_sec(unsigned long seconds)
+{
+    LTRACEF("seconds %lu\n", seconds);
+
+    thread_sleep(seconds * 1000U);
+    return 0;
+}
+
+int sys_sleep_usec(unsigned long useconds)
+{
+    LTRACEF("useconds %lu\n", useconds);
+
+    thread_sleep(useconds / 1000U);
+    return 0;
+}
+
 const struct lkuser_syscall_table lkuser_syscalls = {
     .exit = &sys_exit,
     .open = &sys_open,
@@ -159,6 +175,8 @@ const struct lkuser_syscall_table lkuser_syscalls = {
     .read = &sys_read,
     .lseek = &sys_lseek,
     .sbrk = &sys_sbrk,
+    .sleep_sec = &sys_sleep_sec,
+    .sleep_usec = &sys_sleep_usec,
 };
 
 
