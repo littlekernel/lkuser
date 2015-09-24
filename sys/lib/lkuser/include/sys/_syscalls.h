@@ -20,17 +20,15 @@
  * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
-#pragma once
 
-/* for direct function pointer based syscalls, simply define them as a
- * structure with a list of function pointers.
- */
-#define LK_SYSCALL_DEF(n, ret, name, args...) \
-    ret (*name)(args);
-
-struct lkuser_syscall_table {
-#include "_syscalls.h"
-};
-
-#undef LK_SYSCALL_DEF
+/* included from other files to define a syscall api */
+LK_SYSCALL_DEF(0, void,  exit,      int retcode)
+LK_SYSCALL_DEF(1, int,   open,      const char * name, int flags, int mode)
+LK_SYSCALL_DEF(2, int,   close,     int file)
+LK_SYSCALL_DEF(3, int,   write,     int file, const char *ptr, int len)
+LK_SYSCALL_DEF(4, int,   read,      int file, char *ptr, int len)
+LK_SYSCALL_DEF(5, int,   lseek,     int file, long pos, int whence)
+LK_SYSCALL_DEF(6, void*, sbrk,      long incr)
+LK_SYSCALL_DEF(7, int,   sleep_sec, unsigned long useconds)
+LK_SYSCALL_DEF(8, int,   sleep_usec, unsigned long useconds)
 

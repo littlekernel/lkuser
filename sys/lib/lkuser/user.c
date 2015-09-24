@@ -170,11 +170,19 @@ static int lkuser_start_routine(void *arg)
                              0, ARCH_MMU_FLAG_PERM_USER | ARCH_MMU_FLAG_PERM_NO_EXECUTE);
     LTRACEF("vmm_alloc returns %d, stack at %p\n", err, t->user_stack);
 
+    /* XXX put bits on the user stack */
+
+    /* switch to user mode and start the process */
+    arch_enter_uspace((vaddr_t)t->entry,
+            (uintptr_t)t->user_stack + PAGE_SIZE);
+
+#if 0
     LTRACEF("calling into binary at %p\n", t->entry);
     int retcode = t->entry(&lkuser_syscalls);
     LTRACEF("binary returned to us %d\n", err);
 
     sys_exit(retcode);
+#endif
 
     __UNREACHABLE;
 }

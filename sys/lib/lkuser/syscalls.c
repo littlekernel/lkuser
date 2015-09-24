@@ -167,6 +167,12 @@ int sys_sleep_usec(unsigned long useconds)
     return 0;
 }
 
+int sys_invalid_syscall(void)
+{
+    LTRACEF("invalid syscall\n");
+    return ERR_INVALID_ARGS;
+}
+
 const struct lkuser_syscall_table lkuser_syscalls = {
     .exit = &sys_exit,
     .open = &sys_open,
@@ -178,5 +184,36 @@ const struct lkuser_syscall_table lkuser_syscalls = {
     .sleep_sec = &sys_sleep_sec,
     .sleep_usec = &sys_sleep_usec,
 };
+
+#if ARCH_ARM
+void arm_syscall_handler(struct arm_fault_frame *frame)
+{
+    LTRACEF("arm syscall: r12 %u\n", frame->r[12]);
+
+    /* build a function pointer to call the routine.
+     * the args are jammed into the function independent of if the function
+     * uses them or not, which is safe for simple arg passing.
+     */
+    int64_t (*sfunc)(uint32_t a, uint32_t b, uint32_t c, uint32_t d);
+
+    switch (frame->r[12]) {
+#define LK_SYSCALL_DEF(n, ret, name, args...) \
+        case n: sfunc = (void *)sys_##name; break;
+#include <sys/_syscalls.h>
+#undef LK_SYSCALL_DEF
+        default:
+            sfunc = (void *)sys_invalid_syscall;
+    }
+
+    LTRACEF("func %p\n", sfunc);
+
+    /* call the routine */
+    uint64_t ret = sfunc(frame->r[0], frame->r[1], frame->r[2], frame->r[3]);
+
+    /* unpack the 64bit return back into r0 and r1 */
+    frame->r[0] = ret & 0xffffffff;
+    frame->r[1] = (ret >> 32) & 0xffffffff;
+}
+#endif
 
 
