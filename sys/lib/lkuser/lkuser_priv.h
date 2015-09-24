@@ -23,36 +23,67 @@
 #pragma once
 
 #include <list.h>
-#include <kernel/thread.h>
-#include <kernel/event.h>
 #include <assert.h>
+#include <lib/elf.h>
 #include <lib/lkuser.h>
+#include <kernel/event.h>
+#include <kernel/mutex.h>
+#include <kernel/thread.h>
 #include <sys/lkuser_syscalls.h>
 
-typedef struct lkuser_state {
+#include <kernel/vm.h>
+
+typedef struct lkuser_proc {
     struct list_node node;
+
+    /* list of threads */
+    struct list_node thread_list;
+    mutex_t thread_list_lock;
+
+    /* our address space */
+    vmm_aspace_t *aspace;
 
     int retcode;
     enum {
-        STATE_INITIAL,
-        STATE_RUNNING,
-        STATE_DEAD,
+        PROC_STATE_INITIAL,
+        PROC_STATE_RUNNING,
+        PROC_STATE_DEAD,
     } state;
     event_t event;
 
+    /* binary information from where we run */
+    elf_handle_t elf;
     int (*entry)(const struct lkuser_syscall_table *table);
 
-    thread_t main_thread;
-    void *main_thread_stack;
-} lkuser_state_t;
+    /* sbrk information */
+    uintptr_t last_sbrk;
+    uintptr_t last_sbrk_top;
+} lkuser_proc_t;
+
+typedef struct lkuser_thread {
+    struct list_node node;
+
+    int (*entry)(const struct lkuser_syscall_table *table);
+
+    lkuser_proc_t *proc;
+
+    thread_t thread;
+    void *user_stack;
+} lkuser_thread_t;
 
 /* defined in syscalls.c */
 const struct lkuser_syscall_table lkuser_syscalls;
 
-static inline lkuser_state_t *get_lkuser_state(void)
+static inline lkuser_thread_t *get_lkuser_thread(void)
 {
-    lkuser_state_t *s = (lkuser_state_t *)tls_get(TLS_ENTRY_LKUSER);
-    DEBUG_ASSERT(s);
-    return s;
+    lkuser_thread_t *t = (lkuser_thread_t *)tls_get(TLS_ENTRY_LKUSER);
+    DEBUG_ASSERT(t);
+    return t;
 }
+
+/* one of the syscalls */
+void sys_exit(int retcode) __NO_RETURN;
+
+/* hit this to signal the reaper should run */
+extern event_t reap_event;
 

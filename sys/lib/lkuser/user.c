@@ -28,24 +28,24 @@
 #include <stdlib.h>
 #include <string.h>
 #include <list.h>
+#include <err.h>
 #include <kernel/vm.h>
 #include <kernel/thread.h>
 #include <kernel/mutex.h>
-#include <err.h>
 #include <lib/cksum.h>
 #include <lib/elf.h>
 #include <lib/bio.h>
+#include <lk/init.h>
 #include <sys/lkuser_syscalls.h>
 
 #define LOCAL_TRACE 0
 
-// default virtio device to try to load from
-static const char *bio_device = "virtio0";
-
+// list of processes
 struct list_node proc_list = LIST_INITIAL_VALUE(proc_list);
 static mutex_t proc_lock = MUTEX_INITIAL_VALUE(proc_lock);
+event_t reap_event = EVENT_INITIAL_VALUE(reap_event, false, EVENT_FLAG_AUTOUNSIGNAL);
 
-static void lkuser_reap(void);
+static status_t lkuser_reap(void);
 
 static ssize_t elf_read_hook_bio(struct elf_handle *handle, void *buf, uint64_t offset, size_t len)
 {
@@ -60,31 +60,32 @@ static status_t elf_mem_alloc(struct elf_handle *handle, void **ptr, size_t len,
 {
     LTRACEF("handle %p, ptr %p [%p], size %zu, num %u, flags 0x%x\n", handle, ptr, *ptr, len, num, flags);
 
+    lkuser_proc_t *p = (lkuser_proc_t *)handle->mem_alloc_hook_arg;
+
     char name[16];
     snprintf(name, sizeof(name), "lkuser%u", num);
 
-    status_t err = vmm_alloc(vmm_get_kernel_aspace(), name, len, ptr, 0, VMM_FLAG_VALLOC_SPECIFIC, 0);
+    status_t err = vmm_alloc(p->aspace, name, len, ptr, 0, VMM_FLAG_VALLOC_SPECIFIC, ARCH_MMU_FLAG_PERM_USER);
     LTRACEF("vmm_alloc returns %d\n", err);
 
     return err;
 }
 
-status_t lkuser_load(void **entry)
+static status_t lkuser_load_bio(lkuser_proc_t *proc, const char *bio_name)
 {
     status_t err;
 
     LTRACE;
 
     /* open the block device we're looking for binaries on */
-    bdev_t *bdev = bio_open(bio_device);
+    bdev_t *bdev = bio_open(bio_name);
     if (!bdev) {
-        TRACEF("failed to open block device '%s'\n", bio_device);
+        TRACEF("failed to open block device '%s'\n", bio_name);
         return ERR_NOT_FOUND;
     }
 
     /* create an elf handle */
-    elf_handle_t elf;
-    err = elf_open_handle(&elf, &elf_read_hook_bio, bdev, false);
+    err = elf_open_handle(&proc->elf, &elf_read_hook_bio, bdev, false);
     LTRACEF("elf_open_handle returns %d\n", err);
     if (err < 0) {
         TRACEF("failed to open elf handle\n");
@@ -92,10 +93,11 @@ status_t lkuser_load(void **entry)
     }
 
     /* register a memory allocation callback */
-    elf.mem_alloc_hook = &elf_mem_alloc;
+    proc->elf.mem_alloc_hook = &elf_mem_alloc;
+    proc->elf.mem_alloc_hook_arg = proc;
 
     /* try to load the binary */
-    err = elf_load(&elf);
+    err = elf_load(&proc->elf);
     LTRACEF("elf_load returns %d\n", err);
     if (err < 0) {
         TRACEF("failed to load elf file\n");
@@ -103,9 +105,8 @@ status_t lkuser_load(void **entry)
     }
 
     /* the binary loaded properly */
-    *entry = (void *)elf.entry;
+    proc->entry = (void *)proc->elf.entry;
 
-    elf_close_handle(&elf);
     bio_close(bdev);
 
     return NO_ERROR;
@@ -116,75 +117,120 @@ err:
     return err;
 }
 
-static int lkuser_start_routine(void *arg)
+static lkuser_proc_t *create_proc(void)
 {
-    lkuser_state_t *state = (lkuser_state_t *)arg;
+    lkuser_proc_t *p;
+    p = calloc(1, sizeof(lkuser_proc_t));
+    if (!p) {
+        TRACEF("error allocating proc state\n");
+        return NULL;
+    }
 
-    /* set our per-thread pointer */
-    __tls_set(TLS_ENTRY_LKUSER, (uintptr_t)state);
+    list_initialize(&p->thread_list);
+    mutex_init(&p->thread_list_lock);
 
-    state->state = STATE_RUNNING;
+    p->state = PROC_STATE_INITIAL;
 
-    LTRACEF("calling into binary at %p\n", state->entry);
-    int err = state->entry(&lkuser_syscalls);
-    LTRACEF("binary returned %d\n", err);
+    event_init(&p->event, false, 0);
 
-    return err;
+    /* create an address space for it */
+    if (vmm_create_aspace(&p->aspace, "lkuser", 0) < 0) {
+        TRACEF("error creating address space\n");
+        free(p);
+        return NULL;
+    }
+
+    return p;
 }
 
-status_t lkuser_start_binary(void *entry, bool wait)
+static lkuser_thread_t *create_thread(lkuser_proc_t *p, void *entry)
 {
-    LTRACEF("entry %p\n", entry);
+    lkuser_thread_t *t;
+    t = calloc(1, sizeof(lkuser_thread_t));
+    if (!t) {
+        TRACEF("error allocating thread state\n");
+        return NULL;
+    }
 
-    lkuser_state_t *state;
-    state = calloc(1, sizeof(lkuser_state_t));
-    if (!state) {
-        TRACEF("error allocating user state\n");
+    t->entry = entry;
+    t->proc = p;
+
+    return t;
+}
+
+static int lkuser_start_routine(void *arg)
+{
+    lkuser_thread_t *t = (lkuser_thread_t *)arg;
+
+    /* set our per-thread pointer */
+    __tls_set(TLS_ENTRY_LKUSER, (uintptr_t)t);
+
+    /* create a user stack for the new thread */
+    status_t err = vmm_alloc(t->proc->aspace, "lkuser_user_stack", PAGE_SIZE, &t->user_stack, PAGE_SIZE_SHIFT,
+                             0, ARCH_MMU_FLAG_PERM_USER | ARCH_MMU_FLAG_PERM_NO_EXECUTE);
+    LTRACEF("vmm_alloc returns %d, stack at %p\n", err, t->user_stack);
+
+    LTRACEF("calling into binary at %p\n", t->entry);
+    int retcode = t->entry(&lkuser_syscalls);
+    LTRACEF("binary returned to us %d\n", err);
+
+    sys_exit(retcode);
+
+    __UNREACHABLE;
+}
+
+status_t lkuser_start_binary(lkuser_proc_t *p, bool wait)
+{
+    LTRACEF("proc %p, entry %p\n", p, p->entry);
+
+    DEBUG_ASSERT(p);
+
+    lkuser_thread_t *t = create_thread(p, p->entry);
+    if (!t) {
+        // XXX free proc
         return ERR_NO_MEMORY;
     }
 
-    state->entry = entry;
-    event_init(&state->event, false, 0);
-
-    /* create a stack for the new thread */
-    status_t err = vmm_alloc(vmm_get_kernel_aspace(), "lkuser_stack", PAGE_SIZE, &state->main_thread_stack, PAGE_SIZE_SHIFT, 0, 0);
-    LTRACEF("vmm_alloc returns %d, stack at %p\n", err, state->main_thread_stack);
-
     /* create a new thread */
-    thread_t *t = thread_create_etc(&state->main_thread, "lkuser", lkuser_start_routine, state, LOW_PRIORITY, state->main_thread_stack, PAGE_SIZE);
-    if (!t) {
+    thread_t *lkthread = thread_create_etc(&t->thread, "lkuser", lkuser_start_routine, t, LOW_PRIORITY, NULL, DEFAULT_STACK_SIZE);
+    if (!lkthread) {
         TRACEF("error creating thread\n");
         return ERR_NO_MEMORY;
     }
+    DEBUG_ASSERT(lkthread == &t->thread);
 
-    thread_detach(&state->main_thread);
+    /* add the thread to the process */
+    mutex_acquire(&p->thread_list_lock);
+    list_add_head(&p->thread_list, &t->node);
+    mutex_release(&p->thread_list_lock);
 
-    /* add the process to the list */
+    /* we're ready to run now */
+    t->proc->state = PROC_STATE_RUNNING;
+
+    /* add the process to the process list */
     mutex_acquire(&proc_lock);
-    list_add_head(&proc_list, &state->node);
+    list_add_head(&proc_list, &p->node);
     mutex_release(&proc_lock);
 
     /* resume */
-    LTRACEF("resuming thread\n");
-    thread_resume(&state->main_thread);
+    LTRACEF("resuming main thread\n");
+    thread_resume(&t->thread);
 
     if (wait) {
-        event_wait(&state->event);
-
-        TRACEF("process stopped, retcode %d\n", state->retcode);
+        event_wait(&p->event);
     }
 
     return NO_ERROR;
 }
 
-static void lkuser_reap(void)
+static status_t lkuser_reap(void)
 {
     mutex_acquire(&proc_lock);
 
-    lkuser_state_t *found = NULL;
-    lkuser_state_t *temp;
-    list_for_every_entry(&proc_list, temp, lkuser_state_t, node) {
-        if (temp->state == STATE_DEAD) {
+    lkuser_proc_t *found = NULL;
+    lkuser_proc_t *temp;
+    list_for_every_entry(&proc_list, temp, lkuser_proc_t, node) {
+        if (temp->state == PROC_STATE_DEAD) {
             list_delete(&temp->node);
             found = temp;
             break;
@@ -193,18 +239,51 @@ static void lkuser_reap(void)
 
     mutex_release(&proc_lock);
 
-    if (found) {
-        TRACEF("going to reap %p\n", temp);
+    if (!found)
+        return ERR_NOT_FOUND;
 
-        /* free the stack and memory the loaded binary was using */
-        vmm_free_region(vmm_get_kernel_aspace(), (vaddr_t)temp->entry);
-        vmm_free_region(vmm_get_kernel_aspace(), (vaddr_t)temp->main_thread_stack);
+    LTRACEF("going to reap %p\n", found);
 
-        event_destroy(&temp->event);
+    /* clean up all the threads */
+    lkuser_thread_t *t;
+    while ((t = list_remove_head_type(&found->thread_list, lkuser_thread_t, node))) {
+        thread_join(&t->thread, NULL, INFINITE_TIME);
 
-        free(temp);
+        free(t);
     }
+
+    /* free everything inside the address space */
+    vmm_free_aspace(found->aspace);
+
+    /* no one should be waiting for to us */
+    event_destroy(&found->event);
+
+    /* free any resources in the elf handle */
+    elf_close_handle(&found->elf);
+
+    free(found);
+
+    return NO_ERROR;
 }
+
+static int reaper(void *arg)
+{
+    for (;;) {
+        event_wait(&reap_event);
+
+        while (lkuser_reap() >= 0)
+            ;
+    }
+
+    return 0;
+}
+
+void lkuser_init(uint level)
+{
+    thread_detach_and_resume(thread_create("reaper", &reaper, NULL, HIGH_PRIORITY, DEFAULT_STACK_SIZE));
+}
+
+LK_INIT_HOOK(lkuser, lkuser_init, LK_INIT_LEVEL_THREADING);
 
 #if defined(WITH_LIB_CONSOLE)
 #include <lib/console.h>
@@ -223,12 +302,14 @@ usage:
         return -1;
     }
 
-    static void *loaded_entry;
+    static lkuser_proc_t *proc;
     if (!strcmp(argv[1].str, "load")) {
-        status_t err = lkuser_load(&loaded_entry);
-        printf("lkuser_load() returns %d, entry at %p\n", err, loaded_entry);
+        if (!proc)
+            proc = create_proc();
+        status_t err = lkuser_load_bio(proc, "virtio0");
+        printf("lkuser_load_bio() returns %d, entry at %p\n", err, proc->entry);
     } else if (!strcmp(argv[1].str, "run")) {
-        if (!loaded_entry) {
+        if (!proc) {
             printf("no loaded binary\n");
             return -1;
         }
@@ -238,11 +319,9 @@ usage:
             wait = false;
         }
 
-        status_t err = lkuser_start_binary(loaded_entry, wait);
+        status_t err = lkuser_start_binary(proc, wait);
         printf("lkuser_start_binary() returns %d\n", err);
-        loaded_entry = NULL;
-    } else if (!strcmp(argv[1].str, "reap")) {
-        lkuser_reap();
+        proc = NULL;
     } else {
         printf("unrecognized subcommand\n");
         goto usage;

@@ -30,6 +30,9 @@ GLOBAL_LDFLAGS :=
 GLOBAL_INCLUDES := -I$(NEWLIB_INC_DIR) -Isys/lib/lkuser/include
 GLOBAL_LIBS := $(LIBC) $(LIBM)
 
+GLOBAL_COMPILEFLAGS += -ffunction-sections -fdata-sections
+GLOBAL_LDFLAGS += --gc-sections
+
 include arch/$(ARCH)/arch.mk
 
 ARCH_CC ?= $(CCACHE) $(TOOLCHAIN_PREFIX)gcc
@@ -47,7 +50,7 @@ $(info LIBGCC = $(LIBGCC))
 include $(APP_RULES)
 $(warning APPS = $(APPS))
 
-_all: $(APPS)
+_all: lk $(APPS)
 
 lk:
 	$(MAKE) -f makefile.lk

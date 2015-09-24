@@ -34,24 +34,28 @@
 #include <lib/bio.h>
 #include <sys/lkuser_syscalls.h>
 
+#include "lkuser_priv.h"
+
 #define LOCAL_TRACE 0
 
-void sys_exit(int retcode) __NO_RETURN;
 void sys_exit(int retcode)
 {
     LTRACEF("retcode %d\n", retcode);
 
-    lkuser_state_t *s = get_lkuser_state();
+    lkuser_thread_t *t = get_lkuser_thread();
+    DEBUG_ASSERT(t);
 
     // XXX check that we're the last thread in this process
-    s->state = STATE_DEAD;
-    s->retcode = retcode;
-    event_signal(&s->event, true);
+    t->proc->state = PROC_STATE_DEAD;
+    t->proc->retcode = retcode;
+    event_signal(&t->proc->event, true);
+
+    event_signal(&reap_event, true);
 
     thread_exit(retcode);
 }
 
-int  sys_write(int file, char *ptr, int len)
+int sys_write(int file, const char *ptr, int len)
 {
     LTRACEF("file %d, ptr %p, len %d\n", file, ptr, len);
 
@@ -64,8 +68,97 @@ int  sys_write(int file, char *ptr, int len)
     return len;
 }
 
+int sys_open(const char *name, int flags, int mode)
+{
+    LTRACEF("name '%s', flags 0x%x, mode 0x%x\n", name, flags, mode);
+
+    return -1;
+}
+
+int sys_close(int file)
+{
+    LTRACEF("file %d\n", file);
+
+    return -1;
+}
+
+int sys_read(int file, char *ptr, int len)
+{
+    LTRACEF("file %d, ptr %p, len %d\n", file, ptr, len);
+
+    if (len <= 0)
+        return 0;
+
+    if (file == 0) {
+        /* trying to read from stdin */
+        int c = getchar();
+        if (c >= 0) {
+            /* translate \r -> \n */
+            if (c == '\r') c = '\n';
+
+            ptr[0] = c;
+            return 1;
+        }
+
+        return 0;
+    } else {
+        /* bad file descriptor */
+        return -1;
+    }
+}
+
+int sys_lseek(int file, long pos, int whence)
+{
+    LTRACEF("file %d, pos %ld, whence %d\n", file, pos, whence);
+
+    return -1;
+}
+
+void *sys_sbrk(long incr)
+{
+    void *ptr;
+
+    LTRACEF("incr %ld\n", incr);
+
+    lkuser_thread_t *t = get_lkuser_thread();
+    lkuser_proc_t *p = t->proc;
+
+    if (incr < 0)
+        return NULL;
+
+    if (incr == 0)
+        return (void *)p->last_sbrk;
+
+    if (p->last_sbrk != 0 && p->last_sbrk + incr <= p->last_sbrk_top) {
+        LTRACEF("still have space in the last allocation: last_sbrk 0x%lx, last_sbrk_top 0x%lx\n", p->last_sbrk, p->last_sbrk_top);
+        ptr = (void *)p->last_sbrk;
+        p->last_sbrk += incr;
+        return ptr;
+    }
+
+#define HEAP_ALLOC_CHUNK_SIZE (PAGE_SIZE * 16)
+
+    /* allocate a new chunk for the heap */
+    size_t alloc_size = ROUNDUP(incr, HEAP_ALLOC_CHUNK_SIZE);
+    status_t err = vmm_alloc(t->proc->aspace, "heap", alloc_size, &ptr, PAGE_SIZE_SHIFT,
+                             0, ARCH_MMU_FLAG_PERM_USER | ARCH_MMU_FLAG_PERM_NO_EXECUTE);
+
+    p->last_sbrk = (uintptr_t)ptr + incr;
+    p->last_sbrk_top = (uintptr_t)ptr + HEAP_ALLOC_CHUNK_SIZE;
+
+    LTRACEF("vmm_alloc returns %d, ptr at %p, last_sbrk now 0x%lx, top 0x%lx\n", err, ptr, p->last_sbrk, p->last_sbrk_top);
+
+    return (err >= 0) ? ptr : NULL;
+}
+
 const struct lkuser_syscall_table lkuser_syscalls = {
     .exit = &sys_exit,
+    .open = &sys_open,
+    .close = &sys_close,
     .write = &sys_write,
+    .read = &sys_read,
+    .lseek = &sys_lseek,
+    .sbrk = &sys_sbrk,
 };
+
 

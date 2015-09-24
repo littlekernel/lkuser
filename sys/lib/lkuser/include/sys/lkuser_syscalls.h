@@ -24,6 +24,11 @@
 
 struct lkuser_syscall_table {
     void (*exit)(int retcode);
-    int  (*write)(int file, char *ptr, int len);
+    int  (*open)(const char *name, int flags, int mode);
+    int  (*close)(int file);
+    int  (*write)(int file, const char *ptr, int len);
+    int  (*read)(int file, char *ptr, int len);
+    int  (*lseek)(int file, long pos, int whence);
+    void *(*sbrk)(long incr);
 };
 

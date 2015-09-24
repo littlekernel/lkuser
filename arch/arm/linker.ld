@@ -4,16 +4,11 @@ OUTPUT_ARCH(arm)
 ENTRY(_start)
 SECTIONS
 {
-    . = 0x50000000; /* XXX convenient spot for a VMM-equipped lk before proper user address space is implemented */
-
-    _start = .;
+    . = 0x01000000; /* base of lk user space */
 
     /* text/read-only data */
     /* set the load address to physical MEMBASE */
     .text : {
-        KEEP(*(.text.boot.vectab1))
-        KEEP(*(.text.boot.vectab2))
-        KEEP(*(.text.boot))
         *(.text* .sram.text.glue_7* .gnu.linkonce.t.*)
     }
 
@@ -94,9 +89,6 @@ SECTIONS
         *(.gnu.linkonce.b.*)
         *(COMMON)
         . = ALIGN(4);
-        _heap_low = .;
-        . += 0x10000;
-        _heap_top = .;
         __bss_end = .;
 
     }

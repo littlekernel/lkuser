@@ -11,7 +11,8 @@ APP := $(APP_BUILDDIR)/$(APP_NAME)
 
 APP_CFLAGS :=
 APP_SRCS := \
-	$(LOCAL_DIR)/hello.c
+	$(LOCAL_DIR)/hello.c \
+	$(LOCAL_DIR)/liblk.c
 
 # most of below can go in a shared .mk
 APP_CSRCS := $(filter %.c,$(APP_SRCS))
