@@ -77,7 +77,7 @@ clean-newlib:
 $(BUILDDIR)/apps.fs: $(APPS)
 	@$(MKDIR)
 	@echo generating $@ from $(APPS)
-	$(NOECHO)dd if=/dev/zero of=$@ bs=1M count=16
+	$(NOECHO)dd if=/dev/zero of=$@ bs=1048576 count=16
 	$(NOECHO)cat $(APPS) | dd of=$@ conv=notrunc
 
 test: lk $(APPS) $(BUILDDIR)/apps.fs
