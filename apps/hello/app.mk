@@ -43,7 +43,7 @@ $(APP) $(APP).lst: $(APP_OBJS) $(ARCH_LINKER_SCRIPT) $(GLOBAL_LIBS)
 	@echo linking $@
 	$(NOECHO)$(ARCH_LD) $(GLOBAL_LDFLAGS) -T $(ARCH_LINKER_SCRIPT) $(ARCH_LDFLAGS) $(APP_OBJS) $(EXTRA_OBJS) $(GLOBAL_LIBS) $(LIBGCC) -o $@
 	@echo generating $@.strip
-	$(NOECHO)$(ARCH_STRIP) $@ -o $@.strip
+	$(NOECHO)$(ARCH_STRIP) -d $@ -o $@.strip
 	@echo generating $@.lst
 	$(NOECHO)$(ARCH_OBJDUMP) -d -Mreg-names-raw $@ > $@.lst
 	@echo generating $@.dump
