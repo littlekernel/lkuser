@@ -188,6 +188,9 @@ const struct lkuser_syscall_table lkuser_syscalls = {
 #if ARCH_ARM
 void arm_syscall_handler(struct arm_fault_frame *frame)
 {
+    /* re-enable interrupts to maintain kernel preemptiveness */
+    arch_enable_ints();
+
     LTRACEF("arm syscall: r12 %u\n", frame->r[12]);
 
     /* build a function pointer to call the routine.
