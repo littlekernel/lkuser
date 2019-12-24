@@ -1,5 +1,5 @@
 MODULES += \
 	lib/lkuser
 
-include project/qemu-virt-a15-test.mk
+include project/qemu-virt-arm32-test.mk
 

@@ -23,12 +23,12 @@
 #include "lkuser_priv.h"
 #include <lib/lkuser.h>
 
-#include <trace.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <list.h>
-#include <err.h>
+#include <lk/list.h>
+#include <lk/trace.h>
+#include <lk/err.h>
 #include <kernel/vm.h>
 #include <kernel/thread.h>
 #include <kernel/mutex.h>
@@ -77,6 +77,9 @@ static status_t lkuser_load_bio(lkuser_proc_t *proc, const char *bio_name)
 
     LTRACE;
 
+    /* switch to the address space we're loading into */
+    vmm_set_active_aspace(proc->aspace);
+
     /* open the block device we're looking for binaries on */
     bdev_t *bdev = bio_open(bio_name);
     if (!bdev) {
@@ -108,12 +111,14 @@ static status_t lkuser_load_bio(lkuser_proc_t *proc, const char *bio_name)
     proc->entry = (void *)proc->elf.entry;
 
     bio_close(bdev);
+    vmm_set_active_aspace(NULL);
 
     return NO_ERROR;
 
 err:
     if (bdev)
         bio_close(bdev);
+    vmm_set_active_aspace(NULL);
     return err;
 }
 
@@ -212,6 +217,9 @@ status_t lkuser_start_binary(lkuser_proc_t *p, bool wait)
     list_add_head(&p->thread_list, &t->node);
     mutex_release(&p->thread_list_lock);
 
+    /* set the address space for this thread */
+    lkthread->aspace = p->aspace;
+
     /* we're ready to run now */
     t->proc->state = PROC_STATE_RUNNING;
 
@@ -306,7 +314,6 @@ notenoughargs:
 usage:
         printf("%s load\n", argv[0].str);
         printf("%s run [&]\n", argv[0].str);
-        printf("%s reap\n", argv[0].str);
         return -1;
     }
 

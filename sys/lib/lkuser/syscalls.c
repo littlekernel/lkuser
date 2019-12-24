@@ -22,14 +22,14 @@
  */
 #include "lkuser_priv.h"
 
-#include <trace.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <list.h>
+#include <lk/trace.h>
+#include <lk/list.h>
 #include <kernel/vm.h>
 #include <kernel/thread.h>
-#include <err.h>
+#include <lk/err.h>
 #include <lib/elf.h>
 #include <lib/bio.h>
 #include <sys/lkuser_syscalls.h>
