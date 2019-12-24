@@ -50,14 +50,18 @@ $(info LIBGCC = $(LIBGCC))
 include $(APP_RULES)
 $(warning APPS = $(APPS))
 
-_all: lk $(APPS)
+_all: lk apps
 
 lk:
 	$(MAKE) -f makefile.lk
 
-clean:
-	$(MAKE) -f makefile.lk clean
+apps: $(APPS)
+
+clean-apps:
 	rm -rf -- "."/$(BUILDDIR)
+
+clean: clean-apps
+	$(MAKE) -f makefile.lk clean
 
 spotless: clean clean-newlib
 	$(MAKE) -f makefile.lk spotless
@@ -83,6 +87,6 @@ $(BUILDDIR)/apps.fs: $(APPS)
 test: lk $(APPS) $(BUILDDIR)/apps.fs
 	qemu-system-arm -m 512 -machine virt -cpu cortex-a15 -kernel build-qemu-usertest/lk.elf -nographic -drive if=none,file=$(BUILDDIR)/apps.fs,id=blk,format=raw -device virtio-blk-device,drive=blk
 
-.PHONY: all _all lk clean spotless build-newlib configure-newlib clean-newlib
+.PHONY: all _all apps lk clean clean-apps spotless build-newlib configure-newlib clean-newlib
 
 # vim: set noexpandtab ts=4 sw=4:
