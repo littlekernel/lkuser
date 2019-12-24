@@ -15,8 +15,13 @@ CCACHE ?=
 ARCH ?= arm
 
 # some newlib stuff
+NEWLIB_BUILD_DIR := build-newlib-$(ARCH)
 NEWLIB_INSTALL_DIR := install-newlib
 NEWLIB_INC_DIR := $(NEWLIB_INSTALL_DIR)/arm-eabi/include
+NEWLIB_ARCH_TARGET := $(ARCH)-elf
+ifeq ($(NEWLIB_ARCH_TARGET),arm-elf)
+    NEWLIB_ARCH_TARGET := arm-eabi # hack for arm
+endif
 LIBC := $(NEWLIB_INSTALL_DIR)/arm-eabi/lib/thumb/thumb2/interwork/libc.a
 LIBM := $(NEWLIB_INSTALL_DIR)/arm-eabi/lib/thumb/thumb2/interwork/libm.a
 
@@ -58,7 +63,7 @@ lk:
 apps: $(APPS)
 
 clean-apps:
-	rm -rf -- "."/$(BUILDDIR)
+	rm -rf -- "."/"$(BUILDDIR)"
 
 clean: clean-apps
 	$(MAKE) -f makefile.lk clean
@@ -66,17 +71,25 @@ clean: clean-apps
 spotless: clean clean-newlib
 	$(MAKE) -f makefile.lk spotless
 
-configure-newlib build-newlib/Makefile:
-	mkdir -p build-newlib
-	cd build-newlib && ../newlib/configure --target arm-eabi --disable-newlib-supplied-syscalls --prefix=`pwd`/../install-newlib
+configure-newlib $(NEWLIB_BUILD_DIR)/.stamp:
+	mkdir -p $(NEWLIB_BUILD_DIR)
+	cd $(NEWLIB_BUILD_DIR) && ../newlib/configure --target $(NEWLIB_ARCH_TARGET) --disable-newlib-supplied-syscalls --prefix=`pwd`/../install-newlib
+	$(MAKE) -C $(NEWLIB_BUILD_DIR) configure-host
+	$(MAKE) -C $(NEWLIB_BUILD_DIR) configure-target
+	touch $(NEWLIB_BUILD_DIR)/.stamp
 
-build-newlib $(LIBC) $(LIBM): build-newlib/Makefile
-	mkdir -p install-newlib
-	$(MAKE) -C build-newlib
-	$(MAKE) -C build-newlib install MAKEFLAGS=
+build-newlib $(NEWLIB_INSTALL_DIR)/.stamp: $(NEWLIB_BUILD_DIR)/.stamp
+	mkdir -p $(NEWLIB_INSTALL_DIR)
+	$(MAKE) -C $(NEWLIB_BUILD_DIR)
+	$(MAKE) -C $(NEWLIB_BUILD_DIR) install MAKEFLAGS=
+	touch $(NEWLIB_INSTALL_DIR)/.stamp
+
+$(LIBC) $(LIBM): $(NEWLIB_INSTALL_DIR)/.stamp
+
+newlib: build-newlib
 
 clean-newlib:
-	rm -rf build-newlib install-newlib
+	rm -rf -- ./"$(NEWLIB_BUILD_DIR)" ./"$(NEWLIB_INSTALL_DIR)"
 
 $(BUILDDIR)/apps.fs: $(APPS)
 	@$(MKDIR)
@@ -87,6 +100,6 @@ $(BUILDDIR)/apps.fs: $(APPS)
 test: lk $(APPS) $(BUILDDIR)/apps.fs
 	qemu-system-arm -m 512 -machine virt -cpu cortex-a15 -kernel build-qemu-usertest/lk.elf -nographic -drive if=none,file=$(BUILDDIR)/apps.fs,id=blk,format=raw -device virtio-blk-device,drive=blk
 
-.PHONY: all _all apps lk clean clean-apps spotless build-newlib configure-newlib clean-newlib
+.PHONY: all _all apps lk clean clean-apps spotless newlib build-newlib configure-newlib clean-newlib
 
 # vim: set noexpandtab ts=4 sw=4:
