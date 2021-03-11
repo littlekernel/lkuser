@@ -304,7 +304,7 @@ LK_INIT_HOOK(lkuser, lkuser_init, LK_INIT_LEVEL_THREADING);
 #if defined(WITH_LIB_CONSOLE)
 #include <lib/console.h>
 
-static int cmd_lkuser(int argc, const cmd_args *argv)
+static int cmd_lkuser(int argc, const console_cmd_args *argv)
 {
     int rc = 0;
 
