@@ -38,8 +38,7 @@
 
 #define LOCAL_TRACE 0
 
-void sys_exit(int retcode)
-{
+void sys_exit(int retcode) {
     LTRACEF("retcode %d\n", retcode);
 
     lkuser_thread_t *t = get_lkuser_thread();
@@ -55,8 +54,7 @@ void sys_exit(int retcode)
     thread_exit(retcode);
 }
 
-int sys_write(int file, const char *ptr, int len)
-{
+int sys_write(int file, const char *ptr, int len) {
     LTRACEF("file %d, ptr %p, len %d\n", file, ptr, len);
 
     if (file == 1 || file == 2) {
@@ -68,22 +66,19 @@ int sys_write(int file, const char *ptr, int len)
     return len;
 }
 
-int sys_open(const char *name, int flags, int mode)
-{
+int sys_open(const char *name, int flags, int mode) {
     LTRACEF("name '%s', flags 0x%x, mode 0x%x\n", name, flags, mode);
 
     return -1;
 }
 
-int sys_close(int file)
-{
+int sys_close(int file) {
     LTRACEF("file %d\n", file);
 
     return -1;
 }
 
-int sys_read(int file, char *ptr, int len)
-{
+int sys_read(int file, char *ptr, int len) {
     LTRACEF("file %d, ptr %p, len %d\n", file, ptr, len);
 
     if (len <= 0)
@@ -107,15 +102,13 @@ int sys_read(int file, char *ptr, int len)
     }
 }
 
-int sys_lseek(int file, long pos, int whence)
-{
+int sys_lseek(int file, long pos, int whence) {
     LTRACEF("file %d, pos %ld, whence %d\n", file, pos, whence);
 
     return -1;
 }
 
-void *sys_sbrk(long incr)
-{
+void *sys_sbrk(long incr) {
     void *ptr;
 
     LTRACEF("incr %ld\n", incr);
@@ -151,24 +144,21 @@ void *sys_sbrk(long incr)
     return (err >= 0) ? ptr : NULL;
 }
 
-int sys_sleep_sec(unsigned long seconds)
-{
+int sys_sleep_sec(unsigned long seconds) {
     LTRACEF("seconds %lu\n", seconds);
 
     thread_sleep(seconds * 1000U);
     return 0;
 }
 
-int sys_sleep_usec(unsigned long useconds)
-{
+int sys_sleep_usec(unsigned long useconds) {
     LTRACEF("useconds %lu\n", useconds);
 
     thread_sleep(useconds / 1000U);
     return 0;
 }
 
-int sys_invalid_syscall(void)
-{
+int sys_invalid_syscall(void) {
     LTRACEF("invalid syscall\n");
     return ERR_INVALID_ARGS;
 }
@@ -186,8 +176,7 @@ const struct lkuser_syscall_table lkuser_syscalls = {
 };
 
 #if ARCH_ARM
-void arm_syscall_handler(struct arm_fault_frame *frame)
-{
+void arm_syscall_handler(struct arm_fault_frame *frame) {
     /* re-enable interrupts to maintain kernel preemptiveness */
     arch_enable_ints();
 

@@ -74,8 +74,7 @@ typedef struct lkuser_thread {
 /* defined in syscalls.c */
 extern const struct lkuser_syscall_table lkuser_syscalls;
 
-static inline lkuser_thread_t *get_lkuser_thread(void)
-{
+static inline lkuser_thread_t *get_lkuser_thread(void) {
     lkuser_thread_t *t = (lkuser_thread_t *)tls_get(TLS_ENTRY_LKUSER);
     DEBUG_ASSERT(t);
     return t;

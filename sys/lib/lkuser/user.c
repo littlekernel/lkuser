@@ -47,8 +47,7 @@ event_t reap_event = EVENT_INITIAL_VALUE(reap_event, false, EVENT_FLAG_AUTOUNSIG
 
 static status_t lkuser_reap(void);
 
-static ssize_t elf_read_hook_bio(struct elf_handle *handle, void *buf, uint64_t offset, size_t len)
-{
+static ssize_t elf_read_hook_bio(struct elf_handle *handle, void *buf, uint64_t offset, size_t len) {
     bdev_t *bdev = (bdev_t *)handle->read_hook_arg;
 
     LTRACEF("handle %p, buf %p, offset %llu, len %zu\n", handle, buf, offset, len);
@@ -56,8 +55,7 @@ static ssize_t elf_read_hook_bio(struct elf_handle *handle, void *buf, uint64_t 
     return bio_read(bdev, buf, offset, len);
 }
 
-static status_t elf_mem_alloc(struct elf_handle *handle, void **ptr, size_t len, uint num, uint flags)
-{
+static status_t elf_mem_alloc(struct elf_handle *handle, void **ptr, size_t len, uint num, uint flags) {
     LTRACEF("handle %p, ptr %p [%p], size %zu, num %u, flags 0x%x\n", handle, ptr, *ptr, len, num, flags);
 
     lkuser_proc_t *p = (lkuser_proc_t *)handle->mem_alloc_hook_arg;
@@ -71,8 +69,7 @@ static status_t elf_mem_alloc(struct elf_handle *handle, void **ptr, size_t len,
     return err;
 }
 
-static status_t lkuser_load_bio(lkuser_proc_t *proc, const char *bio_name)
-{
+static status_t lkuser_load_bio(lkuser_proc_t *proc, const char *bio_name) {
     status_t err;
 
     LTRACE;
@@ -122,8 +119,7 @@ err:
     return err;
 }
 
-static lkuser_proc_t *create_proc(void)
-{
+static lkuser_proc_t *create_proc(void) {
     lkuser_proc_t *p;
     p = calloc(1, sizeof(lkuser_proc_t));
     if (!p) {
@@ -148,8 +144,7 @@ static lkuser_proc_t *create_proc(void)
     return p;
 }
 
-static lkuser_thread_t *create_thread(lkuser_proc_t *p, void *entry)
-{
+static lkuser_thread_t *create_thread(lkuser_proc_t *p, void *entry) {
     lkuser_thread_t *t;
     t = calloc(1, sizeof(lkuser_thread_t));
     if (!t) {
@@ -163,8 +158,7 @@ static lkuser_thread_t *create_thread(lkuser_proc_t *p, void *entry)
     return t;
 }
 
-static int lkuser_start_routine(void *arg)
-{
+static int lkuser_start_routine(void *arg) {
     lkuser_thread_t *t = (lkuser_thread_t *)arg;
 
     /* set our per-thread pointer */
@@ -179,7 +173,7 @@ static int lkuser_start_routine(void *arg)
 
     /* switch to user mode and start the process */
     arch_enter_uspace((vaddr_t)t->entry,
-            (uintptr_t)t->user_stack + PAGE_SIZE);
+                      (uintptr_t)t->user_stack + PAGE_SIZE);
 
 #if 0
     LTRACEF("calling into binary at %p\n", t->entry);
@@ -192,8 +186,7 @@ static int lkuser_start_routine(void *arg)
     __UNREACHABLE;
 }
 
-status_t lkuser_start_binary(lkuser_proc_t *p, bool wait)
-{
+status_t lkuser_start_binary(lkuser_proc_t *p, bool wait) {
     LTRACEF("proc %p, entry %p\n", p, p->entry);
 
     DEBUG_ASSERT(p);
@@ -239,8 +232,7 @@ status_t lkuser_start_binary(lkuser_proc_t *p, bool wait)
     return NO_ERROR;
 }
 
-static status_t lkuser_reap(void)
-{
+static status_t lkuser_reap(void) {
     mutex_acquire(&proc_lock);
 
     lkuser_proc_t *found = NULL;
@@ -282,8 +274,7 @@ static status_t lkuser_reap(void)
     return NO_ERROR;
 }
 
-static int reaper(void *arg)
-{
+static int reaper(void *arg) {
     for (;;) {
         event_wait(&reap_event);
 
@@ -294,8 +285,7 @@ static int reaper(void *arg)
     return 0;
 }
 
-void lkuser_init(uint level)
-{
+void lkuser_init(uint level) {
     thread_detach_and_resume(thread_create("reaper", &reaper, NULL, HIGH_PRIORITY, DEFAULT_STACK_SIZE));
 }
 
@@ -304,8 +294,7 @@ LK_INIT_HOOK(lkuser, lkuser_init, LK_INIT_LEVEL_THREADING);
 #if defined(WITH_LIB_CONSOLE)
 #include <lib/console.h>
 
-static int cmd_lkuser(int argc, const console_cmd_args *argv)
-{
+static int cmd_lkuser(int argc, const console_cmd_args *argv) {
     int rc = 0;
 
     if (argc < 2) {
