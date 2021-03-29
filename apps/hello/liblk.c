@@ -35,6 +35,26 @@ __attribute__((naked)) ret _lk_##name(args) { \
 
 #undef LK_SYSCALL_DEF
 
+#elif ARCH_RISCV
+
+#define LK_SYSCALL(func, args...) \
+    _lk_##func(args)
+
+/* build a function that uses the ecall instruction to call into supervisor mode */
+#define LK_SYSCALL_DEF(n, ret, name, args...) \
+__attribute__((naked)) ret _lk_##name(args) { \
+\
+    asm volatile( \
+        "li t0, " #n ";" \
+        "ecall;" \
+        "ret;" \
+        ::: "memory"); \
+}
+
+#include <sys/_syscalls.h>
+
+#undef LK_SYSCALL_DEF
+
 #else
 #error define syscall mechanism for this arch
 #endif

@@ -6,7 +6,6 @@
 
 #include <sys/lkuser_syscalls.h>
 
-
 // test that floating point is working
 __attribute__((noinline))
 double fadd(double a, double b) {

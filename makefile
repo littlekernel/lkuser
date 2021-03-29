@@ -10,18 +10,16 @@ APPS :=
 APP_RULES := $(shell find apps -name app.mk)
 $(warning APP_RULES = $(APP_RULES))
 
-BUILDDIR := build
 CCACHE ?=
 ARCH ?= arm
 
+BUILDDIR := build-$(ARCH)
+
 # some newlib stuff
 NEWLIB_BUILD_DIR := build-newlib-$(ARCH)
-NEWLIB_INSTALL_DIR := install-newlib
-NEWLIB_INC_DIR := $(NEWLIB_INSTALL_DIR)/arm-eabi/include
-NEWLIB_ARCH_TARGET := $(ARCH)-elf
-ifeq ($(NEWLIB_ARCH_TARGET),arm-elf)
-    NEWLIB_ARCH_TARGET := arm-eabi # hack for arm
-endif
+NEWLIB_INSTALL_DIR := install-newlib-$(ARCH)
+NEWLIB_INC_DIR := # arch.mk should set this
+NEWLIB_ARCH_TARGET := # arch.mk should set this
 LIBC := # arch.mk should set this and libm
 LIBM :=
 
@@ -58,7 +56,7 @@ $(warning APPS = $(APPS))
 _all: lk apps
 
 lk:
-	$(MAKE) -f makefile.lk
+	$(MAKE) -f makefile.lk PROJECT=qemu-$(ARCH)-usertest
 
 apps: $(APPS)
 
@@ -73,7 +71,7 @@ spotless: clean clean-newlib
 
 configure-newlib $(NEWLIB_BUILD_DIR)/.stamp:
 	mkdir -p $(NEWLIB_BUILD_DIR)
-	cd $(NEWLIB_BUILD_DIR) && ../newlib/configure --target $(NEWLIB_ARCH_TARGET) --disable-newlib-supplied-syscalls --prefix=`pwd`/../install-newlib
+	cd $(NEWLIB_BUILD_DIR) && ../newlib/configure --target $(NEWLIB_ARCH_TARGET) --disable-newlib-supplied-syscalls --prefix=`pwd`/../$(NEWLIB_INSTALL_DIR)
 	$(MAKE) -C $(NEWLIB_BUILD_DIR) configure-host
 	$(MAKE) -C $(NEWLIB_BUILD_DIR) configure-target
 	touch $(NEWLIB_BUILD_DIR)/.stamp
@@ -98,7 +96,11 @@ $(BUILDDIR)/apps.fs: $(APPS)
 	$(NOECHO)cat $(APPS) | dd of=$@ conv=notrunc
 
 test: lk $(APPS) $(BUILDDIR)/apps.fs
-	qemu-system-arm -m 512 -machine virt -cpu cortex-a15 -kernel build-qemu-usertest/lk.elf -nographic -drive if=none,file=$(BUILDDIR)/apps.fs,id=blk,format=raw -device virtio-blk-device,drive=blk
+ifeq ($(ARCH),arm)
+	qemu-system-arm -m 512 -smp 1 -machine virt -cpu cortex-a15 -kernel build-qemu-arm-usertest/lk.elf -nographic -drive if=none,file=$(BUILDDIR)/apps.fs,id=blk,format=raw -device virtio-blk-device,drive=blk
+else ifeq ($(ARCH),riscv)
+	qemu-system-riscv64 -m 512 -smp 1 -machine virt -cpu rv64 -bios default -kernel build-qemu-riscv-usertest/lk.elf -nographic -drive if=none,file=$(BUILDDIR)/apps.fs,id=blk,format=raw -device virtio-blk-device,drive=blk
+endif
 
 .PHONY: all _all apps lk clean clean-apps spotless newlib build-newlib configure-newlib clean-newlib
 

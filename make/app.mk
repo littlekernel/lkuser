@@ -33,7 +33,7 @@ $(APP) $(APP).lst: $(_APP_OBJS) $(ARCH_LINKER_SCRIPT) $(GLOBAL_LIBS)
 	@echo generating $@.strip
 	$(NOECHO)$(ARCH_STRIP) -d $@ -o $@.strip
 	@echo generating $@.lst
-	$(NOECHO)$(ARCH_OBJDUMP) -d -r -Mreg-names-raw $@ > $@.lst
+	$(NOECHO)$(ARCH_OBJDUMP) -d -r $@ > $@.lst
 	@echo generating $@.dump
 	$(NOECHO)$(ARCH_OBJDUMP) -x $@ > $@.dump
 
