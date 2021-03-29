@@ -93,6 +93,8 @@ int _lseek(int file, _off_t pos, int whence)
 void _exit(int arg)
 {
     LK_SYSCALL(exit, arg);
+
+    __builtin_unreachable();
 }
 
 int usleep(useconds_t useconds)
@@ -105,4 +107,16 @@ int sleep(unsigned int seconds)
     return LK_SYSCALL(sleep_sec, seconds);
 }
 
+int _kill (int pid, int sig)
+{
+    // XXX sort this out
+    LK_SYSCALL(exit, 0);
+
+    __builtin_unreachable();
+}
+
+pid_t _getpid (void)
+{
+  return (pid_t)1;
+}
 

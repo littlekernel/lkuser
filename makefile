@@ -22,8 +22,10 @@ NEWLIB_ARCH_TARGET := $(ARCH)-elf
 ifeq ($(NEWLIB_ARCH_TARGET),arm-elf)
     NEWLIB_ARCH_TARGET := arm-eabi # hack for arm
 endif
-LIBC := $(NEWLIB_INSTALL_DIR)/arm-eabi/lib/thumb/thumb2/interwork/libc.a
-LIBM := $(NEWLIB_INSTALL_DIR)/arm-eabi/lib/thumb/thumb2/interwork/libm.a
+LIBC := # arch.mk should set this and libm
+LIBM :=
+
+include arch/$(ARCH)/arch.mk
 
 # compiler flags
 GLOBAL_COMPILEFLAGS := -g -fno-builtin -finline -O2
@@ -37,8 +39,6 @@ GLOBAL_LIBS := $(LIBC) $(LIBM)
 
 GLOBAL_COMPILEFLAGS += -ffunction-sections -fdata-sections
 GLOBAL_LDFLAGS += --gc-sections
-
-include arch/$(ARCH)/arch.mk
 
 ARCH_CC ?= $(CCACHE) $(TOOLCHAIN_PREFIX)gcc
 ARCH_LD ?= $(TOOLCHAIN_PREFIX)ld
