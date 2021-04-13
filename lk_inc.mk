@@ -14,6 +14,6 @@ LKROOT := lk
 BUILDROOT ?= .
 
 # set the default project if no args are passed
-DEFAULT_PROJECT ?= qemu-usertest
+DEFAULT_PROJECT ?= qemu-arm-usertest
 
 #TOOLCHAIN_PREFIX := <relative path to toolchain>

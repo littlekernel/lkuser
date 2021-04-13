@@ -12,7 +12,7 @@ PHDRS
 ENTRY(_start)
 SECTIONS
 {
-    . = 0x200000; /* 2MB offset */
+    . = 0x1000000; /* 16MB offset, base of user address space */
 
     /* text/read-only data */
     .text : {
@@ -81,7 +81,9 @@ SECTIONS
     . = ALIGN(CONSTANT(MAXPAGESIZE));
     _end = .;
 
+    .comment       0 : { *(.comment) }
+
     /* Strip unnecessary stuff */
-    /DISCARD/ : { *(.comment .note .eh_frame) }
+    /DISCARD/ : { *(.note .eh_frame) }
 }
 

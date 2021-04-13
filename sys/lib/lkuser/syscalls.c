@@ -207,5 +207,43 @@ void arm_syscall_handler(struct arm_fault_frame *frame) {
     frame->r[1] = (ret >> 32) & 0xffffffff;
 }
 #endif
+#if ARCH_RISCV
+#include <arch/riscv/iframe.h>
+void riscv_syscall_handler(struct riscv_short_iframe *frame) {
+    /* re-enable interrupts to maintain kernel preemptiveness */
+    arch_enable_ints();
+
+    LTRACEF("riscv syscall: t0 %u\n", frame->t0);
+
+    /* build a function pointer to call the routine.
+     * the args are jammed into the function independent of if the function
+     * uses them or not, which is safe for simple arg passing.
+     */
+    int64_t (*sfunc)(uint32_t a, uint32_t b, uint32_t c, uint32_t d);
+
+    switch (frame->t0) {
+#define LK_SYSCALL_DEF(n, ret, name, args...) \
+        case n: sfunc = (void *)sys_##name; break;
+#include <sys/_syscalls.h>
+#undef LK_SYSCALL_DEF
+        default:
+            sfunc = (void *)sys_invalid_syscall;
+    }
+
+    LTRACEF("func %p\n", sfunc);
+
+    /* call the routine */
+    uint64_t ret = sfunc(frame->a0, frame->a1, frame->a2, frame->a3);
+
+    /* unpack the 64bit return back into a0 and a1 */
+    frame->a0 = ret & 0xffffffff;
+    frame->a1 = (ret >> 32) & 0xffffffff;
+
+    /* bump the PC forward over the ecall */
+    frame->epc += 4;
+
+    arch_disable_ints();
+}
+#endif
 
 
