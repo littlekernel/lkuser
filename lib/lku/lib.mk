@@ -11,5 +11,6 @@ LIB := $(LIB_BUILDDIR)/$(LIB_NAME).a
 
 LIB_CFLAGS :=
 LIB_SRCS := $(LOCAL_DIR)/liblk.c
+LIB_SRCS += $(LOCAL_DIR)/crt0_$(ARCH).S
 
 include make/lib.mk

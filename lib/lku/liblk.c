@@ -9,6 +9,7 @@ extern int main(void);
 #define SYSCALL_FUNCTION_PTR 0
 
 #if SYSCALL_FUNCTION_PTR
+
 /* direct function pointer version */
 static const struct lkuser_syscall_table *lk_syscalls;
 
@@ -59,20 +60,10 @@ __attribute__((naked)) ret _lk_##name(args) { \
 #error define syscall mechanism for this arch
 #endif
 
-void _start(const struct lkuser_syscall_table *syscalls)
+void _start2(const struct lkuser_syscall_table *syscalls)
 {
 #if SYSCALL_FUNCTION_PTR
     lk_syscalls = syscalls;
-#endif
-#if __riscv
-    // TODO: move to a proper asm file
-    asm(
-        ".option push\n"
-        ".option norelax\n"
-        "la gp, __global_pointer$\n"
-        ".option pop\n"
-       );
-
 #endif
 
     int ret = main();

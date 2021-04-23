@@ -27,7 +27,10 @@ _APP_OBJS := $(_APP_COBJS) $(_APP_CPPOBJS) $(_APP_ASMOBJS) $(_APP_ARM_COBJS) $(_
 
 #$(warning _APP_OBJS = $(_APP_OBJS))
 
-$(_APP_COBJS): $(BUILDDIR)/%.o: %.c $(LIBC)
+# make sure libc is built (and headers are generated) before compiling anything
+$(_APP_OBJS): $(LIBC)
+
+$(_APP_COBJS): $(BUILDDIR)/%.o: %.c
 	@$(MKDIR)
 	@echo compiling $<
 	$(NOECHO)$(ARCH_CC) $(GLOBAL_OPTFLAGS) $(APP_OPTFLAGS) $(GLOBAL_COMPILEFLAGS) $(ARCH_COMPILEFLAGS) $(APP_COMPILEFLAGS) $(GLOBAL_CFLAGS) $(ARCH_CFLAGS) $(APP_CFLAGS) $(THUMBCFLAGS) $(GLOBAL_INCLUDES) $(APP_INCLUDES) -c $< -MD -MP -MT $@ -MF $(@:%o=%d) -o $@

@@ -20,10 +20,18 @@ _LIB_OBJS := $(_LIB_COBJS) $(_LIB_CPPOBJS) $(_LIB_ASMOBJS) $(_LIB_ARM_COBJS) $(_
 
 #$(warning _LIB_OBJS = $(_LIB_OBJS))
 
-$(_LIB_COBJS): $(BUILDDIR)/%.o: %.c $(LIBC)
+# make sure libc is built (and headers are generated) before compiling anything
+$(_LIB_OBJS): $(LIBC)
+
+$(_LIB_COBJS): $(BUILDDIR)/%.o: %.c
 	@$(MKDIR)
 	@echo compiling $<
 	$(NOECHO)$(ARCH_CC) $(GLOBAL_OPTFLAGS) $(LIB_OPTFLAGS) $(GLOBAL_COMPILEFLAGS) $(ARCH_COMPILEFLAGS) $(LIB_COMPILEFLAGS) $(GLOBAL_CFLAGS) $(ARCH_CFLAGS) $(LIB_CFLAGS) $(THUMBCFLAGS) $(GLOBAL_INCLUDES) $(LIB_INCLUDES) -c $< -MD -MP -MT $@ -MF $(@:%o=%d) -o $@
+
+$(_LIB_ASMOBJS): $(BUILDDIR)/%.o: %.S
+	@$(MKDIR)
+	@echo compiling $<
+	$(NOECHO)$(ARCH_CC) $(GLOBAL_OPTFLAGS) $(LIB_OPTFLAGS) $(GLOBAL_COMPILEFLAGS) $(ARCH_COMPILEFLAGS) $(LIB_COMPILEFLAGS) $(GLOBAL_ASMFLAGS) $(ARCH_ASMFLAGS) $(LIB_ASMFLAGS) $(GLOBAL_INCLUDES) $(LIB_INCLUDES) -c $< -MD -MP -MT $@ -MF $(@:%o=%d) -o $@
 
 $(LIB): _LIB_OBJS := $(_LIB_OBJS)
 $(LIB): $(_LIB_OBJS)

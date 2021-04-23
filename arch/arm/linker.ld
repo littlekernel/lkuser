@@ -9,6 +9,7 @@ SECTIONS
     /* text/read-only data */
     /* set the load address to physical MEMBASE */
     .text : {
+        *(.text.startup .text.startup*)
         *(.text* .sram.text.glue_7* .gnu.linkonce.t.*)
     }
 
