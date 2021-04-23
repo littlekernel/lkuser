@@ -1,5 +1,12 @@
 # shared make file for different applications
 
+#$(warning APP_NAME = $(APP_NAME))
+#$(warning APP_BUILDDIR = $(APP_BUILDDIR))
+#$(warning APP = $(APP))
+#$(warning APP_SRCS = $(APP_SRCS))
+#$(warning APP_CFLAGS = $(APP_CFLAGS))
+#$(warning APP_LIBS = $(APP_LIBS))
+
 _APP_CSRCS := $(filter %.c,$(APP_SRCS))
 _APP_CPPSRCS := $(filter %.cpp,$(APP_SRCS))
 _APP_ASMSRCS := $(filter %.S,$(APP_SRCS))
@@ -26,6 +33,7 @@ $(_APP_COBJS): $(BUILDDIR)/%.o: %.c $(LIBC)
 	$(NOECHO)$(ARCH_CC) $(GLOBAL_OPTFLAGS) $(APP_OPTFLAGS) $(GLOBAL_COMPILEFLAGS) $(ARCH_COMPILEFLAGS) $(APP_COMPILEFLAGS) $(GLOBAL_CFLAGS) $(ARCH_CFLAGS) $(APP_CFLAGS) $(THUMBCFLAGS) $(GLOBAL_INCLUDES) $(APP_INCLUDES) -c $< -MD -MP -MT $@ -MF $(@:%o=%d) -o $@
 
 $(APP): _APP_OBJS := $(_APP_OBJS)
+$(APP): APP_LIBS := $(APP_LIBS)
 $(APP) $(APP).lst: $(_APP_OBJS) $(ARCH_LINKER_SCRIPT) $(APP_LIBS) $(GLOBAL_LIBS)
 	@$(MKDIR)
 	@echo linking $@

@@ -6,14 +6,13 @@ APP_BUILDDIR := $(call TOBUILDDIR, $(LOCAL_DIR))
 APP := $(APP_BUILDDIR)/$(APP_NAME)
 
 APP_LIBS := $(call TOBUILDDIR, lib/empty/empty.a)
+APP_LIBS += $(call TOBUILDDIR, lib/lku/lku.a)
 
 #$(warning APP_NAME = $(APP_NAME))
 #$(warning APP_BUILDDIR = $(APP_BUILDDIR))
 #$(warning APP = $(APP))
 
 APP_CFLAGS :=
-APP_SRCS := \
-	$(LOCAL_DIR)/hello.c \
-	$(LOCAL_DIR)/liblk.c
+APP_SRCS := $(LOCAL_DIR)/hello.c
 
 include make/app.mk
