@@ -6,9 +6,12 @@ export GCC_COLORS ?= 1
 all: _all
 
 APPS :=
-
 APP_RULES := $(shell find apps -name app.mk)
 $(warning APP_RULES = $(APP_RULES))
+
+LIBS :=
+LIB_RULES := $(shell find lib -name lib.mk)
+$(warning LIB_RULES = $(LIB_RULES))
 
 CCACHE ?=
 ARCH ?= arm
@@ -41,6 +44,7 @@ GLOBAL_LDFLAGS += --gc-sections
 
 ARCH_CC ?= $(CCACHE) $(TOOLCHAIN_PREFIX)gcc
 ARCH_LD ?= $(TOOLCHAIN_PREFIX)ld
+ARCH_AR ?= $(TOOLCHAIN_PREFIX)ar
 ARCH_OBJDUMP ?= $(TOOLCHAIN_PREFIX)objdump
 ARCH_OBJCOPY ?= $(TOOLCHAIN_PREFIX)objcopy
 ARCH_CPPFILT ?= $(TOOLCHAIN_PREFIX)c++filt
@@ -54,12 +58,17 @@ $(info LIBGCC = $(LIBGCC))
 include $(APP_RULES)
 $(warning APPS = $(APPS))
 
-_all: lk apps
+include $(LIB_RULES)
+$(warning LIBS = $(LIBS))
+
+_all: lk apps libs
 
 lk:
 	PROJECT=$(LK_TESTPROJECT) $(MAKE) -f makefile.lk
 
 apps: $(APPS)
+
+libs: $(LIBS)
 
 clean-apps:
 	rm -rf -- "."/"$(BUILDDIR)"
