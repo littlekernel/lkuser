@@ -92,7 +92,7 @@ build-newlib $(NEWLIB_INSTALL_DIR)/.stamp: $(NEWLIB_BUILD_DIR)/.stamp
 	$(MAKE) -C $(NEWLIB_BUILD_DIR) install MAKEFLAGS=
 	touch $(NEWLIB_INSTALL_DIR)/.stamp
 
-$(LIBC) $(LIBM): $(NEWLIB_INSTALL_DIR)/.stamp
+$(LIBC) $(LIBM) $(CRT0): $(NEWLIB_INSTALL_DIR)/.stamp
 
 newlib: build-newlib
 

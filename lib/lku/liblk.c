@@ -60,16 +60,29 @@ __attribute__((naked)) ret _lk_##name(args) { \
 #error define syscall mechanism for this arch
 #endif
 
-void _start2(const struct lkuser_syscall_table *syscalls)
+// Called from startup assembly
+void _start_c(const struct lkuser_syscall_table *syscalls)
 {
 #if SYSCALL_FUNCTION_PTR
     lk_syscalls = syscalls;
 #endif
 
+    // register to call the fini array on exit
+    extern void __libc_fini_array(void);
+    atexit(__libc_fini_array);
+
+    // call the init array
+    extern void __libc_init_array(void);
+    __libc_init_array();
+
     int ret = main();
 
     exit(ret);
 }
+
+/* make libc happy */
+void _init(void) {}
+void _fini(void) {}
 
 /* implement needed stuff to get it to compile */
 
@@ -140,4 +153,3 @@ pid_t _getpid (void)
 {
   return (pid_t)1;
 }
-

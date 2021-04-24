@@ -7,5 +7,5 @@ _start:
     la  gp, __global_pointer$
 .option pop
 
-    j   _start2
+    j   _start_c
 

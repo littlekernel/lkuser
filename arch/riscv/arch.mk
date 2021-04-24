@@ -16,5 +16,6 @@ NEWLIB_ARCH_TARGET := riscv64-elf
 # libc revision we want
 LIBC := $(NEWLIB_INSTALL_DIR)/riscv64-elf/lib/rv64imafdc/lp64d/libc.a
 LIBM := $(NEWLIB_INSTALL_DIR)/riscv64-elf/lib/rv64imafdc/lp64d/libm.a
+#CRT0 := $(NEWLIB_INSTALL_DIR)/riscv64-elf/lib/rv64imafdc/lp64d/crt0.o
 
 
