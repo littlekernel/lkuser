@@ -111,6 +111,9 @@ $(BUILDDIR)/apps.fs: $(APPS)
 	$(NOECHO)dd if=/dev/zero of=$@ bs=1048576 count=16
 	$(NOECHO)cat $(APPS) | dd of=$@ conv=notrunc
 
+list-toolchain:
+	@echo TOOLCHAIN_PREFIX = ${TOOLCHAIN_PREFIX}
+
 test: lk $(APPS) $(BUILDDIR)/apps.fs
 ifeq ($(ARCH),arm)
 	qemu-system-arm -m 512 -smp 1 -machine virt -cpu cortex-a15 -kernel build-$(LK_TESTPROJECT)/lk.elf -nographic -drive if=none,file=$(BUILDDIR)/apps.fs,id=blk,format=raw -device virtio-blk-device,drive=blk
@@ -118,6 +121,6 @@ else ifeq ($(ARCH),riscv)
 	qemu-system-riscv64 -m 512 -smp 1 -machine virt -cpu rv64 -bios default -kernel build-$(LK_TESTPROJECT)/lk.elf -nographic -drive if=none,file=$(BUILDDIR)/apps.fs,id=blk,format=raw -device virtio-blk-device,drive=blk
 endif
 
-.PHONY: all _all apps lk clean clean-apps spotless newlib build-newlib configure-newlib clean-newlib
+.PHONY: all _all apps lk clean clean-apps spotless newlib build-newlib configure-newlib clean-newlib list-toolchain
 
 # vim: set noexpandtab ts=4 sw=4:
