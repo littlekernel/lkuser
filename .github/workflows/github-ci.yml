@@ -1,0 +1,84 @@
+name: LKUSER CI
+
+# Brute force build a bunch of variants of LK userspace in parallel jobs.
+
+on: [ push, pull_request ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain-ver: [11.2.0]
+        arch:
+          - arm
+          - riscv
+
+    env:
+      TOOLCHAIN_VER: ${{ matrix.toolchain-ver }}
+      ARCH: ${{ matrix.arch }}
+    steps:
+    - name: banner
+      shell: bash
+      run: |
+        printf "Building with %d processors\n" "$(nproc)"
+        grep -oP '(?<=model name\t: ).*' /proc/cpuinfo|head -n1
+        echo PROJECT = $PROJECT
+        echo TOOLCHAIN_VER = $TOOLCHAIN_VER
+        echo ARCH = $ARCH
+
+    # check out the source
+    - name: checkout source
+      uses: actions/checkout@v3
+      with:
+        submodules: true
+
+    # compute the toolchain prefix this project will need
+    - name: compute toolchain
+      shell: bash
+      run: |
+        TOOLCHAIN_PREFIX=$(make list-toolchain | grep TOOLCHAIN_PREFIX | tail -1 | cut -d ' ' -f 3)
+        echo "TOOLCHAIN_PREFIX=${TOOLCHAIN_PREFIX}" >> $GITHUB_ENV
+        echo "TOOLCHAIN=${TOOLCHAIN_PREFIX}${{ matrix.toolchain-ver }}-$(uname)-$(uname -m)" >> $GITHUB_ENV
+
+    # maintain a directory archives/ in the repo
+    # it will contain tarballs of various toolchains
+    - name: cache
+      uses: actions/cache@v2.1.1
+      id: cache
+      with:
+        # A list of files, directories, and wildcard patterns to cache and restore
+        path: archives
+        # An explicit key for restoring and saving the cache
+        key: archives-${{ env.TOOLCHAIN }}
+
+    # download a toolchain from http://newos.org/toolchains
+    - name: fetch/extract toolchain
+      shell: bash
+      run: |
+        TOOLCHAIN_BASE_URL="http://newos.org/toolchains"
+        TOOLCHAIN_SUFFIX="tar.xz"
+        TOOLCHAIN_ADDRESS="$TOOLCHAIN_BASE_URL/$TOOLCHAIN.$TOOLCHAIN_SUFFIX"
+        mkdir -p archives
+        cd archives
+        echo "Downloading toolchain $TOOLCHAIN from $TOOLCHAIN_ADDRESS"
+        wget -v -N $TOOLCHAIN_ADDRESS || exit 1
+        cd ..
+        echo "Unpacking $TOOLCHAIN"
+        tar xf archives/$TOOLCHAIN.$TOOLCHAIN_SUFFIX || exit 1
+        echo "$GITHUB_WORKSPACE/$TOOLCHAIN/bin" >> $GITHUB_PATH
+
+    # build it
+    - name: build
+      shell: bash
+      run: |
+        make -j $(nproc)
+
+    # upload artifacts
+    #- uses: actions/upload-artifact@v2
+    #  with:
+    #   name: build-dir
+    #   path: build-${{ matrix.project }}/lk.*
+
+# vim: ts=2 sw=2 expandtab
