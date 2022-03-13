@@ -17,6 +17,10 @@ double fadd(double a, double b) {
     return a + b;
 }
 
+void call_atexit(void) {
+    printf("at exit here!\n");
+}
+
 int main(void)
 {
     //foo();
@@ -54,6 +58,10 @@ int main(void)
 
     printf("buffers are freed\n");
 
+    printf("registering atexit call\n");
+    atexit(call_atexit);
+
+    printf("exiting main\n");
     return 99;
 }
 

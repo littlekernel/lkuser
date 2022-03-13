@@ -40,7 +40,7 @@ $(APP): APP_LIBS := $(APP_LIBS)
 $(APP) $(APP).lst: $(_APP_OBJS) $(ARCH_LINKER_SCRIPT) $(APP_LIBS) $(GLOBAL_LIBS)
 	@$(MKDIR)
 	@echo linking $@
-	$(NOECHO)$(ARCH_LD) $(GLOBAL_LDFLAGS) -T$(ARCH_LINKER_SCRIPT) $(ARCH_LDFLAGS) $(CRT0) $(_APP_OBJS) $(EXTRA_OBJS) $(APP_LIBS) $(GLOBAL_LIBS) $(LIBGCC) -o $@
+	$(NOECHO)$(ARCH_LD) $(GLOBAL_LDFLAGS) $(ARCH_LDFLAGS) $(CRT0) $(_APP_OBJS) $(EXTRA_OBJS) $(APP_LIBS) $(GLOBAL_LIBS) $(LIBGCC) -o $@
 	@echo generating $@.strip
 	$(NOECHO)$(ARCH_STRIP) -d $@ -o $@.strip
 	@echo generating $@.lst

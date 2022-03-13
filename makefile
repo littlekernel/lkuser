@@ -1,3 +1,6 @@
+# allow local overrides of particular things
+-include local.mk
+
 include lk/make/macros.mk
 NOECHO ?= @
 # try to have the compiler output colorized error messages if available
@@ -81,7 +84,10 @@ spotless: clean clean-newlib
 
 configure-newlib $(NEWLIB_BUILD_DIR)/.stamp:
 	mkdir -p $(NEWLIB_BUILD_DIR)
-	cd $(NEWLIB_BUILD_DIR) && ../newlib/configure --target $(NEWLIB_ARCH_TARGET) --disable-newlib-supplied-syscalls --prefix=`pwd`/../$(NEWLIB_INSTALL_DIR)
+	cd $(NEWLIB_BUILD_DIR) && ../newlib/configure --target $(NEWLIB_ARCH_TARGET) \
+		--prefix=`pwd`/../$(NEWLIB_INSTALL_DIR) \
+		--disable-newlib-supplied-syscalls \
+		--enable-target-optspace
 	$(MAKE) -C $(NEWLIB_BUILD_DIR) configure-host
 	$(MAKE) -C $(NEWLIB_BUILD_DIR) configure-target
 	touch $(NEWLIB_BUILD_DIR)/.stamp

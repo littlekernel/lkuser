@@ -50,21 +50,37 @@ static status_t lkuser_reap(void);
 static ssize_t elf_read_hook_bio(struct elf_handle *handle, void *buf, uint64_t offset, size_t len) {
     bdev_t *bdev = (bdev_t *)handle->read_hook_arg;
 
-    LTRACEF("handle %p, buf %p, offset %llu, len %zu\n", handle, buf, offset, len);
+    LTRACEF("handle %p, buf %p, offset %llu, len %#zx\n", handle, buf, offset, len);
 
     return bio_read(bdev, buf, offset, len);
 }
 
 static status_t elf_mem_alloc(struct elf_handle *handle, void **ptr, size_t len, uint num, uint flags) {
-    LTRACEF("handle %p, ptr %p [%p], size %zu, num %u, flags 0x%x\n", handle, ptr, *ptr, len, num, flags);
+    LTRACEF("handle %p, ptr %p [%p], size %#zx, num %u, flags %#x\n", handle, ptr, *ptr, len, num, flags);
 
     lkuser_proc_t *p = (lkuser_proc_t *)handle->mem_alloc_hook_arg;
 
     char name[16];
     snprintf(name, sizeof(name), "lkuser%u", num);
 
-    status_t err = vmm_alloc(p->aspace, name, len, ptr, 0, VMM_FLAG_VALLOC_SPECIFIC, ARCH_MMU_FLAG_PERM_USER);
-    LTRACEF("vmm_alloc returns %d\n", err);
+    // round the allocations down and up to page boundaries
+    uintptr_t va = (uintptr_t)*ptr;
+    uintptr_t newva = ROUNDDOWN(va, PAGE_SIZE);
+    ptrdiff_t aligndiff = va - newva;
+    len += aligndiff;
+    va = newva;
+
+    // round the size up to the next boundary
+    len = ROUNDUP(len, PAGE_SIZE);
+
+    LTRACEF("aligned va %#lx size %#zx\n", va, len);
+
+    void *vaptr = (void *)va;
+    status_t err = vmm_alloc(p->aspace, name, len, &vaptr, 0, VMM_FLAG_VALLOC_SPECIFIC, ARCH_MMU_FLAG_PERM_USER);
+    LTRACEF("vmm_alloc returns %d, ptr %p\n", err, vaptr);
+
+    *ptr = (void *)((uintptr_t)vaptr + aligndiff);
+    LTRACEF("returning ptr %p\n", *ptr);
 
     return err;
 }

@@ -1,13 +1,13 @@
 # arch stuff
 TOOLCHAIN_PREFIX ?= arm-eabi-
 #ARCH_LINKER_SCRIPT := arch/arm/linker.ld
-ARCH_LINKER_SCRIPT := arch/arm/armelf.xe
+#ARCH_LINKER_SCRIPT := arch/arm/armelf.xe
 
 ARCH_COMPILEFLAGS := -mthumb -march=armv7-a -mfpu=neon -mfloat-abi=hard -DARCH_ARM=1
 ARCH_CFLAGS :=
 ARCH_CPPFLAGS :=
 ARCH_ASMFLAGS :=
-ARCH_LDFLAGS := -z max-page-size=4096
+ARCH_LDFLAGS := -z max-page-size=4096 -Ttext-segment=0x01000000
 
 # newlib path stuff
 NEWLIB_INC_DIR := $(NEWLIB_INSTALL_DIR)/arm-eabi/include

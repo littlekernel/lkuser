@@ -6,6 +6,8 @@
 
 extern int main(void);
 
+// TODO: implement __retarget_lock* routines from newlib
+
 #define SYSCALL_FUNCTION_PTR 0
 
 #if SYSCALL_FUNCTION_PTR
