@@ -32,9 +32,10 @@
 #include <kernel/vm.h>
 #include <kernel/thread.h>
 #include <kernel/mutex.h>
+#include <lib/bio.h>
 #include <lib/cksum.h>
 #include <lib/elf.h>
-#include <lib/bio.h>
+#include <lib/fs.h>
 #include <lk/init.h>
 #include <sys/lkuser_syscalls.h>
 
@@ -53,6 +54,14 @@ static ssize_t elf_read_hook_bio(struct elf_handle *handle, void *buf, uint64_t 
     LTRACEF("handle %p, buf %p, offset %llu, len %#zx\n", handle, buf, offset, len);
 
     return bio_read(bdev, buf, offset, len);
+}
+
+static ssize_t elf_read_hook_file(struct elf_handle *handle, void *buf, uint64_t offset, size_t len) {
+    filehandle *fhandle = (filehandle *)handle->read_hook_arg;
+
+    LTRACEF("handle %p, buf %p, offset %llu, len %#zx\n", handle, buf, offset, len);
+
+    return fs_read_file(fhandle, buf, offset, len);
 }
 
 static status_t elf_mem_alloc(struct elf_handle *handle, void **ptr, size_t len, uint num, uint flags) {
@@ -131,6 +140,57 @@ static status_t lkuser_load_bio(lkuser_proc_t *proc, const char *bio_name) {
 err:
     if (bdev)
         bio_close(bdev);
+    vmm_set_active_aspace(NULL);
+    return err;
+}
+
+static status_t lkuser_load_file(lkuser_proc_t *proc, const char *file_name) {
+    status_t err;
+
+    LTRACE;
+
+    /* switch to the address space we're loading into */
+    vmm_set_active_aspace(proc->aspace);
+
+    filehandle *handle;
+    err = fs_open_file(file_name, &handle);
+    if (err < 0) {
+        TRACEF("failed to open file %s\n", file_name);
+        return err;
+    }
+
+    /* create an elf handle */
+    err = elf_open_handle(&proc->elf, &elf_read_hook_file, handle, false);
+    LTRACEF("elf_open_handle returns %d\n", err);
+    if (err < 0) {
+        TRACEF("failed to open elf handle\n");
+        goto err;
+    }
+
+    /* register a memory allocation callback */
+    proc->elf.mem_alloc_hook = &elf_mem_alloc;
+    proc->elf.mem_alloc_hook_arg = proc;
+
+    /* try to load the binary */
+    err = elf_load(&proc->elf);
+    LTRACEF("elf_load returns %d\n", err);
+    if (err < 0) {
+        TRACEF("failed to load elf file\n");
+        goto err;
+    }
+
+    /* the binary loaded properly */
+    proc->entry = (void *)proc->elf.entry;
+
+    fs_close_file(handle);
+    vmm_set_active_aspace(NULL);
+
+    return NO_ERROR;
+
+err:
+    if (handle) {
+        fs_close_file(handle);
+    }
     vmm_set_active_aspace(NULL);
     return err;
 }
@@ -317,17 +377,27 @@ static int cmd_lkuser(int argc, const console_cmd_args *argv) {
 notenoughargs:
         printf("not enough arguments:\n");
 usage:
-        printf("%s load\n", argv[0].str);
+        printf("%s load <path to binary>\n", argv[0].str);
         printf("%s run [&]\n", argv[0].str);
         return -1;
     }
 
     static lkuser_proc_t *proc;
     if (!strcmp(argv[1].str, "load")) {
-        if (!proc)
+        if (argc < 3) {
+            goto notenoughargs;
+        }
+        if (!proc) {
             proc = create_proc();
-        status_t err = lkuser_load_bio(proc, "virtio0");
-        printf("lkuser_load_bio() returns %d, entry at %p\n", err, proc->entry);
+        }
+        status_t err;
+        if (!strcmp(argv[2].str, "bio")) {
+            err = lkuser_load_bio(proc, "virtio0");
+            printf("lkuser_load_bio() returns %d, entry at %p\n", err, proc->entry);
+        } else {
+            err = lkuser_load_file(proc, argv[2].str);
+            printf("lkuser_load_file() returns %d, entry at %p\n", err, proc->entry);
+        }
     } else if (!strcmp(argv[1].str, "run")) {
         if (!proc) {
             printf("no loaded binary\n");

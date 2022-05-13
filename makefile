@@ -105,6 +105,22 @@ newlib: build-newlib
 clean-newlib:
 	rm -rf -- ./"$(NEWLIB_BUILD_DIR)" ./"$(NEWLIB_INSTALL_DIR)"
 
+# generate a FAT disk image with applications in it
+$(BUILDDIR)/root.fat: $(APPS)
+	@$(MKDIR)
+	@echo generating FAT image $@
+	$(NOECHO)dd if=/dev/zero of=$@.tmp bs=1048576 count=64
+	$(NOECHO)mformat -i $@.tmp -m f8 -v lkuser
+	$(NOECHO)mmd -i $@.tmp bin
+	$(NOECHO)for a in $(APPS); do \
+		mcopy -i $@.tmp $$a ::bin; \
+		echo adding file $$a; \
+	done
+	$(NOECHO)mv $@.tmp $@
+	$(NOECHO)#mdir -i $@ ::
+	$(NOECHO)#mdir -i $@ ::bin
+
+# generate a disk image with apps jammed directly on the block device
 $(BUILDDIR)/apps.fs: $(APPS)
 	@$(MKDIR)
 	@echo generating $@ from $(APPS)
@@ -114,13 +130,15 @@ $(BUILDDIR)/apps.fs: $(APPS)
 list-toolchain:
 	@echo TOOLCHAIN_PREFIX = ${TOOLCHAIN_PREFIX}
 
-test: lk $(APPS) $(BUILDDIR)/apps.fs
+test: lk $(APPS) fs
 ifeq ($(ARCH),arm)
-	qemu-system-arm -m 512 -smp 1 -machine virt -cpu cortex-a15 -kernel build-$(LK_TESTPROJECT)/lk.elf -nographic -drive if=none,file=$(BUILDDIR)/apps.fs,id=blk,format=raw -device virtio-blk-device,drive=blk
+	qemu-system-arm -m 512 -smp 1 -machine virt -cpu cortex-a15 -kernel build-$(LK_TESTPROJECT)/lk.elf -nographic -drive if=none,file=$(BUILDDIR)/root.fat,id=blk,format=raw -device virtio-blk-device,drive=blk
 else ifeq ($(ARCH),riscv)
-	qemu-system-riscv64 -m 512 -smp 1 -machine virt -cpu rv64 -bios default -kernel build-$(LK_TESTPROJECT)/lk.elf -nographic -drive if=none,file=$(BUILDDIR)/apps.fs,id=blk,format=raw -device virtio-blk-device,drive=blk
+	qemu-system-riscv64 -m 512 -smp 1 -machine virt -cpu rv64 -bios default -kernel build-$(LK_TESTPROJECT)/lk.elf -nographic -drive if=none,file=$(BUILDDIR)/root.fat,id=blk,format=raw -device virtio-blk-device,drive=blk
 endif
 
-.PHONY: all _all apps lk clean clean-apps spotless newlib build-newlib configure-newlib clean-newlib list-toolchain
+fs: $(BUILDDIR)/apps.fs $(BUILDDIR)/root.fat
+
+.PHONY: all _all apps fs lk clean clean-apps spotless newlib build-newlib configure-newlib clean-newlib list-toolchain
 
 # vim: set noexpandtab ts=4 sw=4:
