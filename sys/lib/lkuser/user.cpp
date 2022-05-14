@@ -46,7 +46,7 @@ struct list_node proc_list = LIST_INITIAL_VALUE(proc_list);
 static mutex_t proc_lock = MUTEX_INITIAL_VALUE(proc_lock);
 event_t reap_event = EVENT_INITIAL_VALUE(reap_event, false, EVENT_FLAG_AUTOUNSIGNAL);
 
-static status_t lkuser_reap(void);
+static status_t lkuser_reap();
 
 static ssize_t elf_read_hook_bio(struct elf_handle *handle, void *buf, uint64_t offset, size_t len) {
     bdev_t *bdev = (bdev_t *)handle->read_hook_arg;
@@ -130,7 +130,7 @@ static status_t lkuser_load_bio(lkuser_proc_t *proc, const char *bio_name) {
     }
 
     /* the binary loaded properly */
-    proc->entry = (void *)proc->elf.entry;
+    proc->entry = (lkuser_entry_t)proc->elf.entry;
 
     bio_close(bdev);
     vmm_set_active_aspace(NULL);
@@ -180,7 +180,7 @@ static status_t lkuser_load_file(lkuser_proc_t *proc, const char *file_name) {
     }
 
     /* the binary loaded properly */
-    proc->entry = (void *)proc->elf.entry;
+    proc->entry = (lkuser_entry_t)proc->elf.entry;
 
     fs_close_file(handle);
     vmm_set_active_aspace(NULL);
@@ -195,25 +195,26 @@ err:
     return err;
 }
 
-static lkuser_proc_t *create_proc(void) {
+static lkuser_proc_t *create_proc() {
     lkuser_proc_t *p;
-    p = calloc(1, sizeof(lkuser_proc_t));
+    p = new lkuser_proc_t;
     if (!p) {
         TRACEF("error allocating proc state\n");
         return NULL;
     }
+    memset(p, 0, sizeof(*p));
 
     list_initialize(&p->thread_list);
     mutex_init(&p->thread_list_lock);
 
-    p->state = PROC_STATE_INITIAL;
+    p->state = lkuser_proc_t::PROC_STATE_INITIAL;
 
     event_init(&p->event, false, 0);
 
     /* create an address space for it */
     if (vmm_create_aspace(&p->aspace, "lkuser", 0) < 0) {
         TRACEF("error creating address space\n");
-        free(p);
+        delete p;
         return NULL;
     }
 
@@ -222,13 +223,13 @@ static lkuser_proc_t *create_proc(void) {
 
 static lkuser_thread_t *create_thread(lkuser_proc_t *p, void *entry) {
     lkuser_thread_t *t;
-    t = calloc(1, sizeof(lkuser_thread_t));
+    t = new lkuser_thread_t;
     if (!t) {
         TRACEF("error allocating thread state\n");
         return NULL;
     }
 
-    t->entry = entry;
+    t->entry = (lkuser_entry_t)entry;
     t->proc = p;
 
     return t;
@@ -267,7 +268,7 @@ status_t lkuser_start_binary(lkuser_proc_t *p, bool wait) {
 
     DEBUG_ASSERT(p);
 
-    lkuser_thread_t *t = create_thread(p, p->entry);
+    lkuser_thread_t *t = create_thread(p, (void *)p->entry);
     if (!t) {
         // XXX free proc
         return ERR_NO_MEMORY;
@@ -290,7 +291,7 @@ status_t lkuser_start_binary(lkuser_proc_t *p, bool wait) {
     lkthread->aspace = p->aspace;
 
     /* we're ready to run now */
-    t->proc->state = PROC_STATE_RUNNING;
+    t->proc->state = lkuser_proc_t::PROC_STATE_RUNNING;
 
     /* add the process to the process list */
     mutex_acquire(&proc_lock);
@@ -308,13 +309,13 @@ status_t lkuser_start_binary(lkuser_proc_t *p, bool wait) {
     return NO_ERROR;
 }
 
-static status_t lkuser_reap(void) {
+static status_t lkuser_reap() {
     mutex_acquire(&proc_lock);
 
     lkuser_proc_t *found = NULL;
     lkuser_proc_t *temp;
     list_for_every_entry(&proc_list, temp, lkuser_proc_t, node) {
-        if (temp->state == PROC_STATE_DEAD) {
+        if (temp->state == lkuser_proc_t::PROC_STATE_DEAD) {
             list_delete(&temp->node);
             found = temp;
             break;

@@ -45,7 +45,7 @@ void sys_exit(int retcode) {
     DEBUG_ASSERT(t);
 
     // XXX check that we're the last thread in this process
-    t->proc->state = PROC_STATE_DEAD;
+    t->proc->state = lkuser_proc_t::PROC_STATE_DEAD;
     t->proc->retcode = retcode;
     event_signal(&t->proc->event, true);
 
@@ -176,6 +176,7 @@ const struct lkuser_syscall_table lkuser_syscalls = {
 };
 
 #if ARCH_ARM
+extern "C"
 void arm_syscall_handler(struct arm_fault_frame *frame) {
     /* re-enable interrupts to maintain kernel preemptiveness */
     arch_enable_ints();
@@ -186,15 +187,15 @@ void arm_syscall_handler(struct arm_fault_frame *frame) {
      * the args are jammed into the function independent of if the function
      * uses them or not, which is safe for simple arg passing.
      */
-    int64_t (*sfunc)(uint32_t a, uint32_t b, uint32_t c, uint32_t d);
+    int64_t (*sfunc)(unsigned long a, unsigned long b, unsigned long c, unsigned long d);
 
     switch (frame->r[12]) {
 #define LK_SYSCALL_DEF(n, ret, name, args...) \
-        case n: sfunc = (void *)sys_##name; break;
+        case n: sfunc = reinterpret_cast<decltype(sfunc)>((uintptr_t)sys_##name); break;
 #include <sys/_syscalls.h>
 #undef LK_SYSCALL_DEF
         default:
-            sfunc = (void *)sys_invalid_syscall;
+            sfunc = reinterpret_cast<decltype(sfunc)>((uintptr_t)sys_invalid_syscall);
     }
 
     LTRACEF("func %p\n", sfunc);
@@ -209,25 +210,26 @@ void arm_syscall_handler(struct arm_fault_frame *frame) {
 #endif
 #if ARCH_RISCV
 #include <arch/riscv/iframe.h>
+extern "C"
 void riscv_syscall_handler(struct riscv_short_iframe *frame) {
     /* re-enable interrupts to maintain kernel preemptiveness */
     arch_enable_ints();
 
-    LTRACEF("riscv syscall: t0 %u\n", frame->t0);
+    LTRACEF("riscv syscall: t0 %lu\n", frame->t0);
 
     /* build a function pointer to call the routine.
      * the args are jammed into the function independent of if the function
      * uses them or not, which is safe for simple arg passing.
      */
-    int64_t (*sfunc)(uint32_t a, uint32_t b, uint32_t c, uint32_t d);
+    int64_t (*sfunc)(unsigned long a, unsigned long b, unsigned long c, unsigned long d);
 
     switch (frame->t0) {
 #define LK_SYSCALL_DEF(n, ret, name, args...) \
-        case n: sfunc = (void *)sys_##name; break;
+        case n: sfunc = reinterpret_cast<decltype(sfunc)>((uintptr_t)sys_##name); break;
 #include <sys/_syscalls.h>
 #undef LK_SYSCALL_DEF
         default:
-            sfunc = (void *)sys_invalid_syscall;
+            sfunc = reinterpret_cast<decltype(sfunc)>((uintptr_t)sys_invalid_syscall);
     }
 
     LTRACEF("func %p\n", sfunc);

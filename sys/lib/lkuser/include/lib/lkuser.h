@@ -22,8 +22,3 @@
  */
 #pragma once
 
-#include <kernel/thread.h>
-
-/* called from thread_resched() to do any pending work on the lkuser subsystem */
-void lkuser_context_switch(thread_t *oldthread, thread_t *newthread);
-
