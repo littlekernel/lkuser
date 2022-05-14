@@ -23,7 +23,7 @@ LIB_RULES := $(shell find lib -name lib.mk)
 $(warning LIB_RULES = $(LIB_RULES))
 
 CCACHE ?=
-ARCH ?= arm
+ARCH ?= riscv
 
 BUILDDIR := build-$(ARCH)
 LK_TESTPROJECT := qemu-$(ARCH)-usertest
@@ -85,7 +85,7 @@ clean-apps:
 clean: clean-apps
 	PROJECT=$(LK_TESTPROJECT) $(MAKE) -f makefile.lk clean
 
-spotless: clean clean-newlib
+spotless: clean-apps clean-newlib
 	$(MAKE) -f makefile.lk spotless
 
 configure-newlib $(NEWLIB_BUILD_DIR)/.stamp:
