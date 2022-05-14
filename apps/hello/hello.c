@@ -61,6 +61,16 @@ int main(void)
     printf("registering atexit call\n");
     atexit(call_atexit);
 
+    FILE *fp = fopen("/lku/data/testfile", "r");
+    printf("fopen returns %p\n", fp);
+    if (fp) {
+        buf = malloc(4096);
+        size_t err = fread(buf, 1, 4096, fp);
+        printf("fread returns %lu\n", err);
+
+        free(buf);
+    }
+
     printf("exiting main\n");
     return 99;
 }

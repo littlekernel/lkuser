@@ -86,6 +86,8 @@ void _start_c(const struct lkuser_syscall_table *syscalls)
 void _init(void) {}
 void _fini(void) {}
 
+extern int errno;
+
 /* implement needed stuff to get it to compile */
 
 int _fstat(int file, struct stat *st)
@@ -101,29 +103,55 @@ void *_sbrk(ptrdiff_t incr)
     return LK_SYSCALL(sbrk, incr);
 }
 
+/* newlib expects us to set errno in the error case */
 int _open(const char *name, int flags, int mode)
 {
-    return LK_SYSCALL(open, name, flags, mode);
+    int err = LK_SYSCALL(open, name, flags, mode);
+    if (err < 0) {
+        errno = -err;
+        return -1;
+    }
+    return err;
 }
 
 int _close(int file)
 {
-    return LK_SYSCALL(close, file);
+    int err = LK_SYSCALL(close, file);
+    if (err < 0) {
+        errno = -err;
+        return -1;
+    }
+    return err;
 }
 
 int _read(int file, char *ptr, int len)
 {
-    return LK_SYSCALL(read, file, ptr, len);
+    int err = LK_SYSCALL(read, file, ptr, len);
+    if (err < 0) {
+        errno = -err;
+        return -1;
+    }
+    return err;
 }
 
 int _write(int file, const char *ptr, int len)
 {
-    return LK_SYSCALL(write, file, ptr, len);
+    int err = LK_SYSCALL(write, file, ptr, len);
+    if (err < 0) {
+        errno = -err;
+        return -1;
+    }
+    return err;
 }
 
 int _lseek(int file, _off_t pos, int whence)
 {
-    return LK_SYSCALL(lseek, file, pos, whence);
+    int err = LK_SYSCALL(lseek, file, pos, whence);
+    if (err < 0) {
+        errno = -err;
+        return -1;
+    }
+    return err;
 }
 
 void _exit(int arg)

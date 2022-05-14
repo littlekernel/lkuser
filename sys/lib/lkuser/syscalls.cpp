@@ -236,9 +236,13 @@ void riscv_syscall_handler(struct riscv_short_iframe *frame) {
     /* call the routine */
     uint64_t ret = sfunc(frame->a0, frame->a1, frame->a2, frame->a3);
 
+#if __riscv_xlen__ == 32
     /* unpack the 64bit return back into a0 and a1 */
     frame->a0 = ret & 0xffffffff;
     frame->a1 = (ret >> 32) & 0xffffffff;
+#else
+    frame->a0 = ret;
+#endif
 
     /* bump the PC forward over the ecall */
     frame->epc += 4;

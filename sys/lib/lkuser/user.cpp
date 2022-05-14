@@ -208,6 +208,16 @@ usage:
         status_t err = lkuser_start_binary(proc, wait);
         printf("lkuser_start_binary() returns %d\n", err);
         proc = NULL;
+    } else if (!strcmp(argv[1].str, "test")) {
+        // a whole sequence of commands
+        status_t err = fs_mount("/lku", "fat", "virtio0");
+        if (err < 0) {
+            printf("fs mount returns %d\n", err);
+            return -1;
+        }
+
+        console_run_script_locked(nullptr, "lkuser load /lku/bin/hello");
+        console_run_script_locked(nullptr, "lkuser run");
     } else {
         printf("unrecognized subcommand\n");
         goto usage;
