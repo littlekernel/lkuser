@@ -8,11 +8,17 @@ export GCC_COLORS ?= 1
 
 all: _all
 
+# a list of files added by various modules in the form of
+# <build file>:<fs path>
+FS_LIST :=
+
 APPS :=
+APPS_EXTRADEPS :=
 APP_RULES := $(shell find apps -name app.mk)
 $(warning APP_RULES = $(APP_RULES))
 
 LIBS :=
+LIBS_EXTRADEPS :=
 LIB_RULES := $(shell find lib -name lib.mk)
 $(warning LIB_RULES = $(LIB_RULES))
 
@@ -69,9 +75,9 @@ _all: lk apps libs
 lk:
 	PROJECT=$(LK_TESTPROJECT) $(MAKE) -f makefile.lk
 
-apps: $(APPS)
+apps: $(APPS) $(APPS_EXTRADEPS)
 
-libs: $(LIBS)
+libs: $(LIBS) $(LIBS_EXTRADEPS)
 
 clean-apps:
 	rm -rf -- "."/"$(BUILDDIR)"
@@ -105,39 +111,53 @@ newlib: build-newlib
 clean-newlib:
 	rm -rf -- ./"$(NEWLIB_BUILD_DIR)" ./"$(NEWLIB_INSTALL_DIR)"
 
+FS_LIST_LEFT := $(foreach F,$(FS_LIST),$(firstword $(subst :, ,$(F))))
+FS_LIST_RIGHT := $(foreach F,$(FS_LIST),$(lastword $(subst :, ,$(F))))
+FS_LIST_DIRS := $(filter-out .,$(sort $(patsubst %/,%,$(dir $(FS_LIST_RIGHT)))))
+
+$(info FS_LIST = $(FS_LIST))
+$(info FS_LIST_LEFT = $(FS_LIST_LEFT))
+$(info FS_LIST_RIGHT = $(FS_LIST_RIGHT))
+$(info FS_LIST_DIRS = $(FS_LIST_DIRS))
+
+# generate a directory within the build dir that holds all of the
+# files referenced in FS_LIST.
+ROOT_DIR := $(BUILDDIR)/root_dir
+$(ROOT_DIR).stamp: $(FS_LIST_LEFT)
+	@$(MKDIR)
+	@echo building root fs image in $(ROOT_DIR)
+	$(NOECHO)if [ -d "$(ROOT_DIR)" ]; then \
+		rm -r -- "$(ROOT_DIR)";\
+	fi
+	$(NOECHO)mkdir -p -- $(addprefix $(ROOT_DIR)/,$(FS_LIST_DIRS))
+	$(NOECHO)$(foreach F,$(FS_LIST),\
+		cp --  "$(firstword $(subst :, ,$(F)))" "$(addprefix $(ROOT_DIR)/,$(lastword $(subst :, ,$(F))))"; \
+	)
+	$(NOECHO)touch $(ROOT_DIR).stamp
+	$(NOECHO)#du -a $(ROOT_DIR)
+
 # generate a FAT disk image with applications in it
-$(BUILDDIR)/root.fat: $(APPS)
+# copies the entire tree that is stored in $(ROOT_DIR)
+$(BUILDDIR)/root.fat: $(ROOT_DIR).stamp
 	@$(MKDIR)
 	@echo generating FAT image $@
 	$(NOECHO)dd if=/dev/zero of=$@.tmp bs=1048576 count=64
 	$(NOECHO)mformat -i $@.tmp -m f8 -v lkuser
-	$(NOECHO)mmd -i $@.tmp bin
-	$(NOECHO)for a in $(APPS); do \
-		mcopy -i $@.tmp $$a ::bin; \
-		echo adding file $$a; \
-	done
+	$(NOECHO)mcopy -v -i $@.tmp -s "$(ROOT_DIR)"/* ::
 	$(NOECHO)mv $@.tmp $@
-	$(NOECHO)#mdir -i $@ ::
-	$(NOECHO)#mdir -i $@ ::bin
+	$(NOECHO)#mdir -/ -i $@ ::
 
-# generate a disk image with apps jammed directly on the block device
-$(BUILDDIR)/apps.fs: $(APPS)
-	@$(MKDIR)
-	@echo generating $@ from $(APPS)
-	$(NOECHO)dd if=/dev/zero of=$@ bs=1048576 count=16
-	$(NOECHO)cat $(APPS) | dd of=$@ conv=notrunc
+fs: $(BUILDDIR)/root.fat
 
 list-toolchain:
 	@echo TOOLCHAIN_PREFIX = ${TOOLCHAIN_PREFIX}
 
-test: lk $(APPS) fs
+test: _all fs
 ifeq ($(ARCH),arm)
 	qemu-system-arm -m 512 -smp 1 -machine virt -cpu cortex-a15 -kernel build-$(LK_TESTPROJECT)/lk.elf -nographic -drive if=none,file=$(BUILDDIR)/root.fat,id=blk,format=raw -device virtio-blk-device,drive=blk
 else ifeq ($(ARCH),riscv)
 	qemu-system-riscv64 -m 512 -smp 1 -machine virt -cpu rv64 -bios default -kernel build-$(LK_TESTPROJECT)/lk.elf -nographic -drive if=none,file=$(BUILDDIR)/root.fat,id=blk,format=raw -device virtio-blk-device,drive=blk
 endif
-
-fs: $(BUILDDIR)/apps.fs $(BUILDDIR)/root.fat
 
 .PHONY: all _all apps fs lk clean clean-apps spotless newlib build-newlib configure-newlib clean-newlib list-toolchain
 

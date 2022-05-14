@@ -15,4 +15,8 @@ APP_LIBS += $(call TOBUILDDIR, lib/lku/lku.a)
 APP_CFLAGS :=
 APP_SRCS := $(LOCAL_DIR)/hello.c
 
+FS_LIST += $(LOCAL_DIR)/testfile:data/testfile
+
+$(LOCAL_DIR)/testfile:
+
 include make/app.mk

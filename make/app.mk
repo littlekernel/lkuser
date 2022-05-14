@@ -37,19 +37,32 @@ $(_APP_COBJS): $(BUILDDIR)/%.o: %.c
 
 $(APP): _APP_OBJS := $(_APP_OBJS)
 $(APP): APP_LIBS := $(APP_LIBS)
-$(APP) $(APP).lst: $(_APP_OBJS) $(ARCH_LINKER_SCRIPT) $(APP_LIBS) $(GLOBAL_LIBS)
+$(APP): $(_APP_OBJS) $(ARCH_LINKER_SCRIPT) $(APP_LIBS) $(GLOBAL_LIBS)
 	@$(MKDIR)
 	@echo linking $@
 	$(NOECHO)$(ARCH_LD) $(GLOBAL_LDFLAGS) $(ARCH_LDFLAGS) $(CRT0) $(_APP_OBJS) $(EXTRA_OBJS) $(APP_LIBS) $(GLOBAL_LIBS) $(LIBGCC) -o $@
-	@echo generating $@.strip
-	$(NOECHO)$(ARCH_STRIP) -d $@ -o $@.strip
-	@echo generating $@.lst
-	$(NOECHO)$(ARCH_OBJDUMP) -d -r $@ > $@.lst
-	@echo generating $@.dump
-	$(NOECHO)$(ARCH_OBJDUMP) -x $@ > $@.dump
+
+$(APP).lst: $(APP)
+	@$(MKDIR)
+	@echo generating $@
+	$(NOECHO)$(ARCH_OBJDUMP) -C -d -r $< > $@
+
+$(APP).dump: $(APP)
+	@$(MKDIR)
+	@echo generating $@
+	$(NOECHO)$(ARCH_OBJDUMP) -C -x $< > $@
+
+$(APP).strip: $(APP)
+	@$(MKDIR)
+	@echo generating $@
+	$(NOECHO)$(ARCH_STRIP) -d $< -o $@
 
 # add ourself to the build list
 APPS += $(APP)
+APPS_EXTRADEPS += $(APP).lst $(APP).dump $(APP).strip
+
+# add ourself to the list of files to add to the target fs
+FS_LIST += $(APP).strip:bin/$(notdir $(APP))
 
 # empty out various local variables
 _APP_CSRCS :=

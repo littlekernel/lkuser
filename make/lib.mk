@@ -42,6 +42,9 @@ $(LIB): $(_LIB_OBJS)
 # add ourself to the build list
 LIBS += $(LIB)
 
+# add ourself to the list of files to add to the target fs
+FS_LIST += $(LIB):lib/$(notdir $(LIB))
+
 # empty out various local variables
 _LIB_CSRCS :=
 _LIB_CPPSRCS :=
