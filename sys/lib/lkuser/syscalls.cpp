@@ -38,18 +38,16 @@
 
 #define LOCAL_TRACE 0
 
+using namespace lkuser;
+
 void sys_exit(int retcode) {
     LTRACEF("retcode %d\n", retcode);
 
-    lkuser_thread_t *t = get_lkuser_thread();
+    auto *t = get_lkuser_thread();
     DEBUG_ASSERT(t);
 
     // XXX check that we're the last thread in this process
-    t->proc->state = lkuser_proc_t::PROC_STATE_DEAD;
-    t->proc->retcode = retcode;
-    event_signal(&t->proc->event, true);
-
-    event_signal(&reap_event, true);
+    t->get_proc()->exit(retcode);
 
     thread_exit(retcode);
 }
@@ -113,19 +111,20 @@ void *sys_sbrk(long incr) {
 
     LTRACEF("incr %ld\n", incr);
 
-    lkuser_thread_t *t = get_lkuser_thread();
-    lkuser_proc_t *p = t->proc;
+    auto *t = get_lkuser_thread();
+    proc *p = t->get_proc();
+    auto ss = p->get_sbrk_state();
 
     if (incr < 0)
         return NULL;
 
     if (incr == 0)
-        return (void *)p->last_sbrk;
+        return (void *)ss.last_sbrk;
 
-    if (p->last_sbrk != 0 && p->last_sbrk + incr <= p->last_sbrk_top) {
-        LTRACEF("still have space in the last allocation: last_sbrk 0x%lx, last_sbrk_top 0x%lx\n", p->last_sbrk, p->last_sbrk_top);
-        ptr = (void *)p->last_sbrk;
-        p->last_sbrk += incr;
+    if (ss.last_sbrk != 0 && ss.last_sbrk + incr <= ss.last_sbrk_top) {
+        LTRACEF("still have space in the last allocation: last_sbrk 0x%lx, last_sbrk_top 0x%lx\n", ss.last_sbrk, ss.last_sbrk_top);
+        ptr = (void *)ss.last_sbrk;
+        ss.last_sbrk += incr;
         return ptr;
     }
 
@@ -133,13 +132,13 @@ void *sys_sbrk(long incr) {
 
     /* allocate a new chunk for the heap */
     size_t alloc_size = ROUNDUP(incr, HEAP_ALLOC_CHUNK_SIZE);
-    status_t err = vmm_alloc(t->proc->aspace, "heap", alloc_size, &ptr, PAGE_SIZE_SHIFT,
+    status_t err = vmm_alloc(t->get_proc()->get_aspace(), "heap", alloc_size, &ptr, PAGE_SIZE_SHIFT,
                              0, ARCH_MMU_FLAG_PERM_USER | ARCH_MMU_FLAG_PERM_NO_EXECUTE);
 
-    p->last_sbrk = (uintptr_t)ptr + incr;
-    p->last_sbrk_top = (uintptr_t)ptr + HEAP_ALLOC_CHUNK_SIZE;
+    ss.last_sbrk = (uintptr_t)ptr + incr;
+    ss.last_sbrk_top = (uintptr_t)ptr + HEAP_ALLOC_CHUNK_SIZE;
 
-    LTRACEF("vmm_alloc returns %d, ptr at %p, last_sbrk now 0x%lx, top 0x%lx\n", err, ptr, p->last_sbrk, p->last_sbrk_top);
+    LTRACEF("vmm_alloc returns %d, ptr at %p, last_sbrk now 0x%lx, top 0x%lx\n", err, ptr, ss.last_sbrk, ss.last_sbrk_top);
 
     return (err >= 0) ? ptr : NULL;
 }

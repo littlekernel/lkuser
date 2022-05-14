@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015 Travis Geiselbrecht
+ * Copyright (c) 2015-2022 Travis Geiselbrecht
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files
@@ -23,20 +23,49 @@
 #pragma once
 
 #include <lk/list.h>
-#include <assert.h>
-#include <lib/elf.h>
-#include <lib/lkuser.h>
-#include <kernel/event.h>
-#include <kernel/mutex.h>
 #include <kernel/thread.h>
 #include <sys/lkuser_syscalls.h>
-#include <kernel/vm.h>
 
-#include "proc.h"
-#include "thread.h"
+namespace lkuser {
 
-/* defined in syscalls.c */
-extern const lkuser_syscall_table lkuser_syscalls;
+class proc;
 
-/* one of the syscalls */
-void sys_exit(int retcode) __NO_RETURN;
+class thread {
+private:
+    explicit thread(proc *p);
+
+    DISALLOW_COPY_ASSIGN_AND_MOVE(thread);
+public:
+    ~thread();
+
+    // factory to build threads
+    static thread *create(proc *p, vaddr_t entry);
+
+    // accessors
+    proc *get_proc() const { return proc_; }
+    vaddr_t get_entry() const { return entry_; }
+    void *get_stack() const { return user_stack_; }
+
+    // operations on our thread
+    void resume() { thread_resume(&lkthread); }
+    void join() { thread_join(&lkthread, NULL, INFINITE_TIME); }
+
+    // public for proc to maintain a list
+    list_node node = LIST_INITIAL_CLEARED_VALUE;
+
+private:
+    proc *proc_ = nullptr;
+    vaddr_t entry_ {};
+
+    void *user_stack_ = nullptr;
+
+    thread_t lkthread {};
+};
+
+static inline thread *get_lkuser_thread() {
+    thread *t = (thread *)tls_get(TLS_ENTRY_LKUSER);
+    DEBUG_ASSERT(t);
+    return t;
+}
+
+} // namespace lkuser
