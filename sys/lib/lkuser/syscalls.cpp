@@ -67,13 +67,37 @@ int sys_write(int file, const char *ptr, int len) {
 int sys_open(const char *name, int flags, int mode) {
     LTRACEF("name '%s', flags 0x%x, mode 0x%x\n", name, flags, mode);
 
-    return -1;
+    // open the file
+    file_handle *handle {};
+    status_t err = open_file(name, &handle);
+    if (err < 0) {
+        return err;
+    }
+
+    // find a slot for it in the process's table
+    auto *t = get_lkuser_thread();
+    proc *p = t->get_proc();
+    auto &table = p->get_file_table();
+
+    int fd = table.alloc_handle(handle);
+    if (fd < 0) {
+        delete handle;
+        return fd;
+    }
+
+    LTRACEF("returning fd %d\n", fd);
+    return fd;
 }
 
 int sys_close(int file) {
     LTRACEF("file %d\n", file);
 
-    return -1;
+    // close the file in the table
+    auto *t = get_lkuser_thread();
+    proc *p = t->get_proc();
+    auto &table = p->get_file_table();
+
+    return table.close_handle(file);
 }
 
 int sys_read(int file, char *ptr, int len) {
@@ -96,7 +120,15 @@ int sys_read(int file, char *ptr, int len) {
         return 0;
     } else {
         /* bad file descriptor */
-        return -1;
+        auto *t = get_lkuser_thread();
+        proc *p = t->get_proc();
+        const auto &table = p->get_file_table();
+
+        auto *handle = table.get_handle(file);
+        if (!handle) {
+            return ERR_INVALID_ARGS;
+        }
+        return handle->read(ptr, len);
     }
 }
 

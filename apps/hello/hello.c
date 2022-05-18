@@ -68,6 +68,14 @@ int main(void)
         size_t err = fread(buf, 1, 4096, fp);
         printf("fread returns %lu\n", err);
 
+        if (err > 0) {
+            printf("file data:\n");
+            for (size_t i = 0; i < err; i++) {
+                putchar(buf[i]);
+            }
+            printf("\n");
+        }
+
         free(buf);
     }
 

@@ -34,6 +34,7 @@
 
 #include "proc.h"
 #include "thread.h"
+#include "file_handle.h"
 
 /* defined in syscalls.c */
 extern const lkuser_syscall_table lkuser_syscalls;

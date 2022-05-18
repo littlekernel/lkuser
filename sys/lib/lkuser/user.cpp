@@ -152,6 +152,12 @@ status_t lkuser_start_binary(proc *p, bool wait) {
         return ERR_NO_MEMORY;
     }
 
+    // XXX hack
+    // stuff something in the first three file descriptors
+    p->get_file_table().alloc_specific_handle(new file_handle_null, 0);
+    p->get_file_table().alloc_specific_handle(new file_handle_null, 1);
+    p->get_file_table().alloc_specific_handle(new file_handle_null, 2);
+
     /* we're ready to run now */
     p->start();
 

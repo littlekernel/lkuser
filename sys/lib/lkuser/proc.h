@@ -28,6 +28,8 @@
 #include <kernel/event.h>
 #include <kernel/vm.h>
 
+#include "file_handle.h"
+
 namespace lkuser {
 
 class thread;
@@ -77,6 +79,10 @@ public:
     sbrk_state &get_sbrk_state() { return sbrk_state_; }
     const sbrk_state &get_sbrk_state() const { return sbrk_state_; }
 
+    // the file descriptor table
+    auto const &get_file_table() const { return files_; }
+    auto &get_file_table() { return files_; }
+
     // list node for the process list
     list_node node = LIST_INITIAL_CLEARED_VALUE;
 
@@ -97,6 +103,9 @@ private:
 
     // sbrk information
     sbrk_state sbrk_state_;
+
+    // our file table
+    file_table<64> files_;
 };
 
 void add_to_global_list(proc *p);
