@@ -4,7 +4,8 @@ MODULE := $(LOCAL_DIR)
 
 GLOBAL_INCLUDES += $(LOCAL_DIR)/include
 
-MODULE_SRCS += $(LOCAL_DIR)/file_handle.cpp
+MODULE_SRCS += $(LOCAL_DIR)/fs.cpp
+MODULE_SRCS += $(LOCAL_DIR)/handle.cpp
 MODULE_SRCS += $(LOCAL_DIR)/proc.cpp
 MODULE_SRCS += $(LOCAL_DIR)/syscalls.cpp
 MODULE_SRCS += $(LOCAL_DIR)/thread.cpp

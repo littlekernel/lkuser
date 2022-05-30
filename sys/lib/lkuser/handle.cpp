@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015 Travis Geiselbrecht
+ * Copyright (c) 2022 Travis Geiselbrecht
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files
@@ -20,20 +20,8 @@
  * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
-#pragma once
-
-#include <lk/list.h>
-#include <assert.h>
-#include <lib/elf.h>
-#include <lib/lkuser.h>
-#include <kernel/event.h>
-#include <kernel/mutex.h>
-#include <kernel/thread.h>
-#include <sys/lkuser_syscalls.h>
-#include <kernel/vm.h>
-
-#include "proc.h"
-#include "thread.h"
 #include "handle.h"
-#include "fs.h"
+
+#include <lk/err.h>
+#include <lk/trace.h>
 

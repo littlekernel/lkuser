@@ -24,66 +24,65 @@
 
 #include <lk/cpp.h>
 #include <lk/err.h>
+#include <lk/trace.h>
 #include <kernel/mutex.h>
-#include <lib/fs.h>
 
 namespace lkuser {
 
-// generic class for file handles
-class file_handle {
+// generic handle to things, goes in the per process handle table
+class handle {
+public:
+    // stores a type field, for hand rolled RTTI
+    enum class type {
+        EMPTY,
+        FILE,
+    };
+
 protected:
-    file_handle() = default;
+    explicit handle(type t) : type_(t) {}
+    DISALLOW_COPY_ASSIGN_AND_MOVE(handle);
 public:
-    virtual ~file_handle() = default;
+    virtual ~handle() = default;
 
-    DISALLOW_COPY_ASSIGN_AND_MOVE(file_handle);
+    // only really supports being closed, which does nothing
+    virtual status_t close() { return NO_ERROR; }
 
-    // status_t fs_create_file(const char *path, filehandle **handle, uint64_t len) __NONNULL();
-    // status_t fs_open_file(const char *path, filehandle **handle) __NONNULL();
-    // status_t fs_remove_file(const char *path) __NONNULL();
-    // ssize_t fs_read_file(filehandle *handle, void *buf, off_t offset, size_t len) __NONNULL();
-    // ssize_t fs_write_file(filehandle *handle, const void *buf, off_t offset, size_t len) __NONNULL();
-    // status_t fs_close_file(filehandle *handle) __NONNULL();
-    // status_t fs_stat_file(filehandle *handle, struct file_stat *) __NONNULL((1));
-    // status_t fs_truncate_file(filehandle *handle, uint64_t len) __NONNULL((1));
-    virtual ssize_t read(void *buf, size_t len) = 0;
-    virtual ssize_t read_at(void *buf, off_t offset, size_t len) = 0;
-    virtual status_t close() = 0;
+    type get_type() const { return type_; }
+    bool is_type(type t) const { return type_ == t; }
 
-    virtual bool is_open() const = 0;
+private:
+    type type_;
 };
 
-class file_handle_null final : public file_handle {
-public:
-    explicit file_handle_null() : file_handle() {}
-    virtual ~file_handle_null() {}
-
-    ssize_t read(void *buf, size_t len) override { return ERR_NOT_SUPPORTED; }
-    ssize_t read_at(void *buf, off_t offset, size_t len) override { return ERR_NOT_SUPPORTED; };
-    status_t close() override { return ERR_NOT_SUPPORTED; }
-
-    bool is_open() const override { return true; }
-};
-
+// A static fixed size table, one per process.
+// Allocates first fit, posix style.
 template <size_t size>
-struct file_table {
-    mutable Mutex lock_;
-    file_handle *handles[size] = {};
+class handle_table {
+public:
+    handle_table() = default;
+    ~handle_table() {
+        // all handles must be closed before destruction
+        for (size_t i = 0; i < size; i++) {
+            DEBUG_ASSERT(handles[i] == nullptr);
+        }
+    }
+    DISALLOW_COPY_ASSIGN_AND_MOVE(handle_table);
 
     // searches for the first slot, sticking the handle in it
-    int alloc_handle(file_handle *handle) {
-        DEBUG_ASSERT(handle);
+    int alloc_handle(handle *h) {
+        DEBUG_ASSERT(h);
 
         AutoLock guard(lock_);
         for (size_t i = 0; i < size; i++) {
             if (!handles[i]) {
-                handles[i] = handle;
+                handles[i] = h;
                 return i;
             }
         }
         return ERR_NOT_FOUND;
     }
-    int alloc_specific_handle(file_handle *handle, int fd) {
+
+    int alloc_specific_slot(handle *h, int fd) {
         if (fd < 0) {
             return ERR_INVALID_ARGS;
         }
@@ -91,10 +90,10 @@ struct file_table {
             return ERR_INVALID_ARGS;
         }
 
-        DEBUG_ASSERT(handle);
+        DEBUG_ASSERT(h);
 
         AutoLock guard(lock_);
-        handles[fd] = handle;
+        handles[fd] = h;
 
         return fd;
     }
@@ -102,6 +101,7 @@ struct file_table {
     // close the handle at the passed in slot, if opened.
     // zeros the slot
     status_t close_handle(int fd) {
+        //TRACEF("fd %d\n", fd);
         if (fd < 0) {
             return ERR_INVALID_ARGS;
         }
@@ -109,23 +109,34 @@ struct file_table {
             return ERR_INVALID_ARGS;
         }
 
-
-        file_handle *handle {};
+        handle *h = nullptr;
         {
             AutoLock guard(lock_);
-            handle = handles[fd];
-            if (!handle) {
+            h = handles[fd];
+            if (!h) {
                 return ERR_NOT_FOUND;
             }
 
             handles[fd] = nullptr;
         }
 
-        DEBUG_ASSERT(handle);
-        return handle->close();
+        DEBUG_ASSERT(h);
+        auto status = h->close();
+
+        // TODO: have some sort of ref counter on the handle
+        delete h;
+        return status;
     }
 
-    file_handle *get_handle(int fd) const {
+    // used during cleanup to empty the table
+    void close_all() {
+        //TRACEF("%p\n", this);
+        for (size_t i = 0; i < size; i++) {
+            close_handle(i);
+        }
+    }
+
+    handle *get_handle(int fd) const {
         if (fd < 0) {
             return nullptr;
         }
@@ -136,10 +147,11 @@ struct file_table {
         AutoLock guard(lock_);
         return handles[fd];
     }
-};
 
-// opens a file of some type and hands the handle back
-status_t open_file(const char *path, file_handle **handle);
+private:
+    mutable Mutex lock_;
+    handle *handles[size] = {};
+};
 
 } // namespace lkuser
 

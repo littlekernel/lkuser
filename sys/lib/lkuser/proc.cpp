@@ -47,7 +47,9 @@ void add_to_global_list(proc *p) {
 }
 
 proc::proc() = default;
-proc::~proc() = default;
+proc::~proc() {
+    LTRACEF("%p\n", this);
+}
 
 proc *proc::create() {
     proc *p = new proc;
@@ -80,6 +82,8 @@ status_t proc::add_thread(thread *t) {
 }
 
 void proc::destroy() {
+    LTRACEF("%p\n", this);
+
     // TODO: formalize the state machine more
     DEBUG_ASSERT(state_ == PROC_STATE_DEAD);
 
@@ -90,6 +94,9 @@ void proc::destroy() {
 
         delete t;
     }
+
+    // close all of the open handles
+    get_handle_table().close_all();
 
     // free everything inside the address space
     vmm_free_aspace(aspace_);
@@ -111,7 +118,7 @@ void proc::start() {
 
 void proc::exit(int retcode) {
     state_ = proc::PROC_STATE_DEAD;
-    retcode = retcode;
+    retcode_ = retcode;
     event_signal(&exit_event_, true);
 
     // TODO: only trigger the reaper when the last thread exits

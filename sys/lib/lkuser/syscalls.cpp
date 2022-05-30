@@ -40,6 +40,8 @@
 
 using namespace lkuser;
 
+namespace {
+
 void sys_exit(int retcode) {
     LTRACEF("retcode %d\n", retcode);
 
@@ -50,18 +52,6 @@ void sys_exit(int retcode) {
     t->get_proc()->exit(retcode);
 
     thread_exit(retcode);
-}
-
-int sys_write(int file, const char *ptr, int len) {
-    LTRACEF("file %d, ptr %p, len %d\n", file, ptr, len);
-
-    if (file == 1 || file == 2) {
-        for (int i = 0; i < len; i++) {
-            fputc(ptr[i], stdout);
-        }
-    }
-
-    return len;
 }
 
 int sys_open(const char *name, int flags, int mode) {
@@ -77,10 +67,11 @@ int sys_open(const char *name, int flags, int mode) {
     // find a slot for it in the process's table
     auto *t = get_lkuser_thread();
     proc *p = t->get_proc();
-    auto &table = p->get_file_table();
+    auto &table = p->get_handle_table();
 
     int fd = table.alloc_handle(handle);
     if (fd < 0) {
+        handle->close();
         delete handle;
         return fd;
     }
@@ -95,7 +86,7 @@ int sys_close(int file) {
     // close the file in the table
     auto *t = get_lkuser_thread();
     proc *p = t->get_proc();
-    auto &table = p->get_file_table();
+    auto &table = p->get_handle_table();
 
     return table.close_handle(file);
 }
@@ -103,33 +94,43 @@ int sys_close(int file) {
 int sys_read(int file, char *ptr, int len) {
     LTRACEF("file %d, ptr %p, len %d\n", file, ptr, len);
 
-    if (len <= 0)
-        return 0;
+    /* look in the handle table and find a file to read from */
+    auto *t = get_lkuser_thread();
+    proc *p = t->get_proc();
+    const auto &table = p->get_handle_table();
 
-    if (file == 0) {
-        /* trying to read from stdin */
-        int c = getchar();
-        if (c >= 0) {
-            /* translate \r -> \n */
-            if (c == '\r') c = '\n';
-
-            ptr[0] = c;
-            return 1;
-        }
-
-        return 0;
-    } else {
-        /* bad file descriptor */
-        auto *t = get_lkuser_thread();
-        proc *p = t->get_proc();
-        const auto &table = p->get_file_table();
-
-        auto *handle = table.get_handle(file);
-        if (!handle) {
-            return ERR_INVALID_ARGS;
-        }
-        return handle->read(ptr, len);
+    auto *handle = table.get_handle(file);
+    if (!handle) {
+        return ERR_INVALID_ARGS;
     }
+
+    file_handle *fhandle = file_handle::dynamic_cast_from_handle(handle);
+    if (!fhandle) {
+        return ERR_NOT_FILE;
+    }
+
+    return fhandle->read(ptr, len);
+}
+
+int sys_write(int file, const char *ptr, int len) {
+    LTRACEF("file %d, ptr %p, len %d\n", file, ptr, len);
+
+    /* look in the handle table and find a file to write to */
+    auto *t = get_lkuser_thread();
+    proc *p = t->get_proc();
+    const auto &table = p->get_handle_table();
+
+    auto *handle = table.get_handle(file);
+    if (!handle) {
+        return ERR_INVALID_ARGS;
+    }
+
+    file_handle *fhandle = file_handle::dynamic_cast_from_handle(handle);
+    if (!fhandle) {
+        return ERR_NOT_FILE;
+    }
+
+    return fhandle->write(ptr, len);
 }
 
 int sys_lseek(int file, long pos, int whence) {
@@ -194,7 +195,7 @@ int sys_invalid_syscall(void) {
     return ERR_INVALID_ARGS;
 }
 
-const struct lkuser_syscall_table lkuser_syscalls = {
+static const struct lkuser_syscall_table lkuser_syscalls = {
     .exit = &sys_exit,
     .open = &sys_open,
     .close = &sys_close,
@@ -205,6 +206,8 @@ const struct lkuser_syscall_table lkuser_syscalls = {
     .sleep_sec = &sys_sleep_sec,
     .sleep_usec = &sys_sleep_usec,
 };
+
+} // namespace
 
 #if ARCH_ARM
 extern "C"

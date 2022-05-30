@@ -154,9 +154,13 @@ status_t lkuser_start_binary(proc *p, bool wait) {
 
     // XXX hack
     // stuff something in the first three file descriptors
-    p->get_file_table().alloc_specific_handle(new file_handle_null, 0);
-    p->get_file_table().alloc_specific_handle(new file_handle_null, 1);
-    p->get_file_table().alloc_specific_handle(new file_handle_null, 2);
+    for (int i = 0; i < 3; i++) {
+        file_handle *console;
+        auto status = open_file("/dev/console", &console);
+        DEBUG_ASSERT(status == NO_ERROR);
+        DEBUG_ASSERT(console);
+        p->get_handle_table().alloc_specific_slot(console, i);
+    }
 
     /* we're ready to run now */
     p->start();

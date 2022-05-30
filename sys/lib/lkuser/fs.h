@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015 Travis Geiselbrecht
+ * Copyright (c) 2022 Travis Geiselbrecht
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files
@@ -22,18 +22,40 @@
  */
 #pragma once
 
-#include <lk/list.h>
-#include <assert.h>
-#include <lib/elf.h>
-#include <lib/lkuser.h>
-#include <kernel/event.h>
+#include <lk/cpp.h>
+#include <lk/err.h>
 #include <kernel/mutex.h>
-#include <kernel/thread.h>
-#include <sys/lkuser_syscalls.h>
-#include <kernel/vm.h>
+#include <lib/fs.h>
 
-#include "proc.h"
-#include "thread.h"
 #include "handle.h"
-#include "fs.h"
 
+namespace lkuser {
+
+// generic class for handles to things that act like files
+class file_handle : public handle {
+protected:
+    file_handle() : handle(type::FILE) {}
+public:
+    virtual ~file_handle() = default;
+
+    DISALLOW_COPY_ASSIGN_AND_MOVE(file_handle);
+
+    // see if we can dynamically cast to a file handle from a plain handle
+    static file_handle *dynamic_cast_from_handle(handle *h) {
+        if (h->is_type(type::FILE)) {
+            return static_cast<file_handle *>(h);
+        }
+        return nullptr;
+    }
+
+    virtual ssize_t read(void *buf, size_t len) = 0;
+    virtual ssize_t read_at(void *buf, off_t offset, size_t len) = 0;
+    virtual ssize_t write(const void *buf, size_t len) = 0;
+    virtual ssize_t write_at(const void *buf, off_t offset, size_t len) = 0;
+    virtual status_t close() = 0;
+};
+
+// opens a file of some type and hands the handle back
+status_t open_file(const char *path, file_handle **handle);
+
+} // namespace lkuser

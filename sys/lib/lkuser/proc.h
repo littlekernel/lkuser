@@ -28,7 +28,7 @@
 #include <kernel/event.h>
 #include <kernel/vm.h>
 
-#include "file_handle.h"
+#include "handle.h"
 
 namespace lkuser {
 
@@ -80,8 +80,8 @@ public:
     const sbrk_state &get_sbrk_state() const { return sbrk_state_; }
 
     // the file descriptor table
-    auto const &get_file_table() const { return files_; }
-    auto &get_file_table() { return files_; }
+    auto const &get_handle_table() const { return handles_; }
+    auto &get_handle_table() { return handles_; }
 
     // list node for the process list
     list_node node = LIST_INITIAL_CLEARED_VALUE;
@@ -105,7 +105,7 @@ private:
     sbrk_state sbrk_state_;
 
     // our file table
-    file_table<64> files_;
+    handle_table<64> handles_;
 };
 
 void add_to_global_list(proc *p);

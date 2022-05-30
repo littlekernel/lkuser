@@ -39,8 +39,15 @@ $(LIB): $(_LIB_OBJS)
 	@echo linking $@
 	$(NOECHO)$(ARCH_AR) -rcs $@ $(_LIB_OBJS)
 
+$(LIB).lst: $(LIB)
+	@$(MKDIR)
+	@echo generating $@
+	$(NOECHO)$(ARCH_OBJDUMP) -C -d -r $< > $@
+
+
 # add ourself to the build list
 LIBS += $(LIB)
+LIBS_EXTRADEPS += $(LIB).lst
 
 # add ourself to the list of files to add to the target fs
 FS_LIST += $(LIB):lib/$(notdir $(LIB))
