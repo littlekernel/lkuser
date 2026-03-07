@@ -40,9 +40,79 @@
 #include <lk/init.h>
 #include <sys/lkuser_syscalls.h>
 
+#ifndef FS_MAX_PATH_LEN
+#define FS_MAX_PATH_LEN 256
+#endif
+
 #define LOCAL_TRACE 0
 
 namespace lkuser {
+
+static char g_lkuser_fs_root[FS_MAX_PATH_LEN] = "/";
+
+const char* get_fs_root(void) {
+    return g_lkuser_fs_root;
+}
+
+status_t set_fs_root(const char* path) {
+    if (!path || path[0] == '\0') {
+        return ERR_INVALID_ARGS;
+    }
+
+    char normalized[FS_MAX_PATH_LEN];
+    size_t len = strlcpy(normalized, path, sizeof(normalized));
+    if (len >= sizeof(normalized)) {
+        return ERR_TOO_BIG;
+    }
+
+    if (normalized[0] != '/') {
+        return ERR_INVALID_ARGS;
+    }
+
+    while (len > 1 && normalized[len - 1] == '/') {
+        normalized[len - 1] = '\0';
+        len--;
+    }
+
+    strlcpy(g_lkuser_fs_root, normalized, sizeof(g_lkuser_fs_root));
+    return NO_ERROR;
+}
+
+status_t resolve_fs_path(const char* path, char* out_path, size_t out_path_len) {
+    if (!path || !out_path || out_path_len == 0) {
+        return ERR_INVALID_ARGS;
+    }
+
+    const char* root = get_fs_root();
+    const bool root_is_slash = (root[0] == '/' && root[1] == '\0');
+
+    const char* relative = path;
+    while (*relative == '/') {
+        relative++;
+    }
+
+    if (root_is_slash) {
+        if (relative != path) {
+            if (snprintf(out_path, out_path_len, "/%s", relative) >= (int)out_path_len) {
+                return ERR_TOO_BIG;
+            }
+        } else {
+            if (strlcpy(out_path, path, out_path_len) >= out_path_len) {
+                return ERR_TOO_BIG;
+            }
+        }
+    } else {
+        if (*relative == '\0') {
+            if (strlcpy(out_path, root, out_path_len) >= out_path_len) {
+                return ERR_TOO_BIG;
+            }
+        } else if (snprintf(out_path, out_path_len, "%s/%s", root, relative) >= (int)out_path_len) {
+            return ERR_TOO_BIG;
+        }
+    }
+
+    return NO_ERROR;
+}
 
 static ssize_t elf_read_hook_file(struct elf_handle *handle, void *buf, uint64_t offset, size_t len) {
     filehandle *fhandle = (filehandle *)handle->read_hook_arg;
@@ -84,16 +154,23 @@ static status_t elf_mem_alloc(struct elf_handle *handle, void **ptr, size_t len,
 
 static status_t lkuser_load_file(proc *proc, const char *file_name) {
     status_t err;
+    char resolved_path[FS_MAX_PATH_LEN];
 
     LTRACE;
+
+    err = resolve_fs_path(file_name, resolved_path, sizeof(resolved_path));
+    if (err < 0) {
+        TRACEF("failed to resolve file path '%s': %d\n", file_name, err);
+        return err;
+    }
 
     /* switch to the address space we're loading into */
     vmm_set_active_aspace(proc->get_aspace());
 
     filehandle *handle;
-    err = fs_open_file(file_name, &handle);
+    err = fs_open_file(resolved_path, &handle);
     if (err < 0) {
-        TRACEF("failed to open file %s\n", file_name);
+        TRACEF("failed to open file %s (resolved from %s)\n", resolved_path, file_name);
         return err;
     }
 
@@ -180,6 +257,7 @@ notenoughargs:
 usage:
         printf("%s load <path to binary>\n", argv[0].str);
         printf("%s run [&]\n", argv[0].str);
+        printf("%s root <path>\n", argv[0].str);
         return -1;
     }
 
@@ -194,6 +272,20 @@ usage:
         status_t err;
         err = lkuser_load_file(proc, argv[2].str);
         printf("lkuser_load_file() returns %d, entry at %#lx\n", err, proc->get_loader_state().entry);
+    } else if (!strcmp(argv[1].str, "root")) {
+        if (argc < 3) {
+            printf("lkuser root is '%s'\n", lkuser::get_fs_root());
+            printf("usage: %s root <path>\n", argv[0].str);
+            return -1;
+        }
+
+        status_t err = lkuser::set_fs_root(argv[2].str);
+        if (err < 0) {
+            printf("failed to set lkuser root to '%s': %d\n", argv[2].str, err);
+            return err;
+        }
+
+        printf("lkuser root set to '%s'\n", lkuser::get_fs_root());
     } else if (!strcmp(argv[1].str, "run")) {
         if (!proc) {
             printf("no loaded binary\n");

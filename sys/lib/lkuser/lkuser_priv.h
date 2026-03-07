@@ -23,6 +23,7 @@
 #pragma once
 
 #include <lk/list.h>
+#include <stddef.h>
 #include <assert.h>
 #include <lib/elf.h>
 #include <lib/lkuser.h>
@@ -34,6 +35,14 @@
 
 #include "proc.h"
 #include "thread.h"
+
+namespace lkuser {
+
+const char* get_fs_root(void);
+status_t set_fs_root(const char* path);
+status_t resolve_fs_path(const char* path, char* out_path, size_t out_path_len);
+
+} // namespace lkuser
 
 /* defined in syscalls.c */
 extern const lkuser_syscall_table lkuser_syscalls;
