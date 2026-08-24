@@ -1,64 +1,59 @@
 # LKUser Development Notes
 
-`lkuser` is an overlay repository on top of:
-- LK (`lk/` submodule) for kernel and base build system
-- external libc (`newlib/` submodule, currently)
+`lkuser` is an overlay repository that builds a user-space environment on top of:
+- LK (`lk/` submodule) for the kernel and base build system
+- newlib (`newlib/` submodule) as the user-space libc
 
-The repository adds user-space integration and extension code, especially `lib/lkuser`, while reusing LK's modular build flow.
-
-## What This Repo Does
-
-- Extends LK with extra functionality in `lib/lkuser`
-- Builds both kernel-side and user-space artifacts
-- Coordinates cross-repo build steps through top-level make targets
-
-## Build Model
-
-The top-level `makefile` orchestrates sub-makes and generated output trees.
-
-Architecture is controlled by `ARCH` (default: `riscv` in the top-level `makefile`).
-Agent guidance: do not assume host architecture; always check/propagate `ARCH` when invoking build or test targets.
-
-Typical flow:
-1. build libc/toolchain pieces (`newlib/` and related output dirs)
-2. build LK kernel/app modules (via `lk/` and LK make system)
-3. produce combined artifacts in `build-*` directories
-
-Primary entrypoint is the top-level `makefile` in this repository.
-
-## Key Paths
-
-- `lk/`: LK kernel source and build system (git submodule)
-- `newlib/`: libc source (git submodule)
-- `lib/lkuser/`: overlay library added by this repo
-- `apps/`, `sys/`: user-space and integration code
-- `build-*` directories: generated outputs (do not treat as source)
-
-## Editing Guidance
-
-- Prefer editing overlay code in this repo first (`lib/lkuser`, `apps`, `sys`).
-- Treat `lk/` and `newlib/` as upstream submodules unless intentional submodule changes are required.
-- Avoid committing generated files from `build-*`, `install-*`, or tool output unless explicitly needed.
-- Preserve compatibility with LK module conventions (`rules.mk`, `MODULE_DEPS`, etc.) when adding new code.
+Treat `lk/` and `newlib/` as upstream submodules unless intentional submodule changes are required. `build-*` and `install-*` directories are generated output — never treat as source or commit files from them.
 
 ## Quick Commands
 
 Run from repository root:
 
 ```bash
-make
-make clean
-make spotless
-make test
+make -j $(nproc)     # build everything: newlib (first time), LK kernel, user apps/libs
+make test            # build + generate FAT image + boot QEMU (exit QEMU with Ctrl-A X)
+make clean           # clean kernel + user-space outputs (keeps newlib)
+make spotless        # also remove newlib build/install trees
+make fs              # just regenerate build-$(ARCH)/root.fat
+make list-toolchain  # print the required cross toolchain prefix
 ```
 
-Use specific top-level targets as defined in `makefile` for libc/toolchain/kernel variants.
+Architecture is selected with `ARCH` (default `riscv` in the top-level `makefile`); e.g. `ARCH=arm make -j $(nproc)`. Never assume host architecture — always check/propagate `ARCH` on build and test targets. Toolchain prefixes come from `arch/<arch>/arch.mk`: `riscv64-elf-` for riscv, `arm-eabi-` for arm (overridable via `TOOLCHAIN_PREFIX`, and CI fetches prebuilt ones from newos.org/toolchains). Building the FAT image requires mtools (`mformat`/`mcopy`); `make test` requires `qemu-system-riscv64` or `qemu-system-arm`.
 
-- `make spotless`: removes all local build outputs, including the newlib build/install trees.
-- `make test`: builds LK + user-space artifacts, generates a FAT filesystem image, and starts QEMU.
+There is no unit-test suite; `make test` is an interactive QEMU boot. Local make overrides can go in an untracked `local.mk` (auto-included).
 
-For `make test`, QEMU launch is architecture-specific in the top-level `makefile`:
-- `ARCH=arm` -> `qemu-system-arm`
-- `ARCH=riscv` -> `qemu-system-riscv64`
+## Architecture: Two Build Systems, One Makefile
 
-If adding a new architecture, update top-level `test` handling and any architecture-specific toolchain/newlib settings under `arch/<arch>/`.
+The top-level `makefile` drives three mostly independent builds:
+
+1. **newlib** — configured/built once per arch into `build-newlib-$(ARCH)` and installed into `install-newlib-$(ARCH)` (stamp-file gated; only rebuilt after `make spotless` or `make clean-newlib`). Configured with `--disable-newlib-supplied-syscalls`; syscalls come from this repo's `lib/lku`.
+2. **LK kernel** — via `makefile.lk` (symlink to `lk/makefile`) with `PROJECT=qemu-$(ARCH)-usertest`. `lk_inc.mk` sets `LKINC := sys`, so LK's module system also searches `sys/`: the project files live in `sys/project/`, and the kernel-side module is `sys/lib/lkuser` (referenced as module `lib/lkuser` in LK's namespace — note repo-root `lib/` is a *different*, user-space directory). Output: `build-qemu-$(ARCH)-usertest/lk.elf`.
+3. **User space** — the top-level makefile itself compiles apps and libs with its own simple rule system (not LK's): it `find`s every `apps/*/app.mk` and `lib/*/lib.mk`, which set `APP_SRCS`/`LIB_SRCS` etc. and include the shared `make/app.mk` / `make/lib.mk`. Output goes to `build-$(ARCH)/`. Apps link against `lib/lku` (crt0 + syscall stubs), newlib's `libc.a`/`libm.a`, and libgcc. Per-arch flags, linker scripts, and newlib multilib paths are in `arch/<arch>/arch.mk`.
+
+To add a user app: create `apps/<name>/app.mk` modeled on `apps/hello/app.mk` — it is discovered automatically. Kernel-side code follows normal LK module conventions (`rules.mk`, `MODULE_DEPS`, ...).
+
+## Syscall Mechanism (the key cross-file flow)
+
+The syscall API is a single X-macro list: `sys/lib/lkuser/include/sys/_syscalls.h`, rows of `LK_SYSCALL_DEF(num, ret, name, args...)`. It is expanded in two places:
+
+- **Kernel side**: `sys/lib/lkuser/syscalls.cpp` implements the handlers; `sys/lib/lkuser/include/sys/lkuser_syscalls.h` builds the syscall table.
+- **User side**: `lib/lku/liblk.c` expands each row into a trap stub (`svc` on arm, `ecall` on riscv, syscall number in r12/t0) and layers newlib's `_read`/`_write`/`_sbrk`/... retargeting on top.
+
+To add a syscall: add a row to `_syscalls.h` with the next number, implement it in `syscalls.cpp`, and wire any libc-facing wrapper in `liblk.c`. Both sides recompile from the same header, so numbers can never skew.
+
+Kernel-side runtime (`sys/lib/lkuser/`): `user.cpp` loads ELF binaries from the filesystem via LK's `lib/elf`/`lib/fs`/`lib/bio`, `proc.cpp`/`thread.cpp` manage processes, address spaces, and a reaper thread (started from an `LK_INIT_HOOK`).
+
+## Packaging and Running
+
+Every app/lib registers itself in `FS_LIST` (`<build file>:<fs path>` pairs; apps land stripped at `bin/<name>`, extra data files can be added — see `apps/hello/app.mk`). `make fs` assembles these into `build-$(ARCH)/root_dir/` and then a 64MB FAT image `build-$(ARCH)/root.fat`, which `make test` attaches to QEMU as a virtio-blk device.
+
+Inside the booted LK console, user binaries are driven with the `lkuser` command:
+
+```
+lkuser load /bin/hello    # load an ELF from the mounted image
+lkuser run [&]            # start it (& = don't wait)
+lkuser root <path>        # set the fs root prefix for user-space file access
+```
+
+If adding a new architecture: add `arch/<arch>/arch.mk` (toolchain, flags, newlib multilib paths), a crt0 in `lib/lku/`, a syscall stub variant in `liblk.c`, a project in `sys/project/`, and a QEMU invocation in the top-level `test` target.
