@@ -240,9 +240,7 @@ void riscv_syscall_handler(struct riscv_short_iframe *frame) {
     frame->a0 = ret & 0xffffffff;
     frame->a1 = (ret >> 32) & 0xffffffff;
 
-    /* bump the PC forward over the ecall */
-    frame->epc += 4;
-
+    /* the arch already stepped epc past the ecall */
     arch_disable_ints();
 }
 #endif

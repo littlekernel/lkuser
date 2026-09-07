@@ -91,8 +91,16 @@ void proc::destroy() {
         delete t;
     }
 
-    // free everything inside the address space
-    vmm_free_aspace(aspace_);
+    // free everything inside the address space. A joined thread's cpu may
+    // still be in the middle of switching away from it, which reports ERR_BUSY.
+    status_t err;
+    while ((err = vmm_free_aspace(aspace_)) == ERR_BUSY) {
+        thread_sleep(1);
+    }
+    if (err < 0) {
+        TRACEF("vmm_free_aspace returns %d\n", err);
+    }
+    aspace_ = nullptr;
 
     // no one should be waiting for to us
     event_destroy(&exit_event_);
