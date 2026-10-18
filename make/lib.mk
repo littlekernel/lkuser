@@ -37,7 +37,11 @@ $(LIB): _LIB_OBJS := $(_LIB_OBJS)
 $(LIB): $(_LIB_OBJS)
 	@$(MKDIR)
 	@echo linking $@
+	$(NOECHO)rm -f $@
 	$(NOECHO)$(ARCH_AR) -rcs $@ $(_LIB_OBJS)
+
+# the compile rules write a .d file next to each object; the top level makefile reads them
+DEPS += $(_LIB_OBJS:%.o=%.d)
 
 # add ourself to the build list
 LIBS += $(LIB)

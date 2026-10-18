@@ -22,84 +22,78 @@
  */
 #pragma once
 
-#include <lk/list.h>
-#include <lib/elf.h>
-#include <kernel/mutex.h>
 #include <kernel/event.h>
+#include <kernel/mutex.h>
 #include <kernel/vm.h>
+#include <lk/cpp.h>
+#include <lktl/list.h>
+#include <lktl/ref_ptr.h>
+#include <stdint.h>
+
+#include "object.h"
+#include "thread.h"
 
 namespace lkuser {
 
-class thread;
+// A user process: an address space, the threads that run in it, and how it ended.
+class proc : public object, public lk::list_hook<> {
+public:
+    // A process with an empty address space and a startup block carrying argv (argv[0] is the
+    // image path). Nothing runs until start().
+    static status_t create(int argc, const char *const *argv, lk::ref_ptr<proc> *out);
 
-class proc {
+    // Starts the main thread at entry, on a new stack whose top holds the startup block.
+    status_t start(vaddr_t entry);
+
+    // Ends the process with code. The first call wins. Called by a thread of the process,
+    // which then leaves with thread_exit().
+    void exit(int code);
+
+    // A thread is leaving without ending the process. Returns true if it was the last one,
+    // in which case the caller ends the process.
+    bool thread_exiting();
+
+    // Blocks until the process has exited and returns its exit code.
+    int wait();
+
+    // Frees the threads and address spaces of exited processes. Run by the reaper thread.
+    static void reap_exited();
+
+    uint32_t pid() const { return pid_; }
+    const char *name() const { return name_; }
+    vmm_aspace_t *aspace() const { return aspace_; }
+
 private:
-    proc();
+    friend class object;
 
+    explicit proc(uint32_t pid);
+    ~proc();
     DISALLOW_COPY_ASSIGN_AND_MOVE(proc);
 
-public:
-    ~proc();
+    status_t build_args(int argc, const char *const *argv);
+    bool exited();
+    void teardown();
+    void free_aspace();
 
-    static proc *create();
-    void destroy();
+    enum class state { CREATED, RUNNING, DEAD };
 
-    status_t add_thread(thread *t);
-    status_t wait(); // wait for process to exit
-    void start();
-    void exit(int retcode); // must be called by a thread in the process
-
-    // accessors
-    vmm_aspace_t *get_aspace() const { return aspace_; }
-
-    // state of the loader
-    struct loader_state {
-        elf_handle_t elf;
-        vaddr_t entry; // entry point to the binary
-        bool loaded;
-    };
-    loader_state &get_loader_state() { return loader_; }
-    const loader_state &get_loader_state() const { return loader_; }
-
-    // process state
-    enum state {
-        PROC_STATE_INITIAL,
-        PROC_STATE_RUNNING,
-        PROC_STATE_DEAD,
-    };
-    state get_state() const { return state_; }
-
-    // sbrk state
-    struct sbrk_state {
-        uintptr_t last_sbrk;
-        uintptr_t last_sbrk_top;
-    };
-    sbrk_state &get_sbrk_state() { return sbrk_state_; }
-    const sbrk_state &get_sbrk_state() const { return sbrk_state_; }
-
-    // list node for the process list
-    list_node node = LIST_INITIAL_CLEARED_VALUE;
-
-private:
-    loader_state loader_ {};
-
-    // our address space
+    const uint32_t pid_;
+    char name_[32] = {};
     vmm_aspace_t *aspace_ = nullptr;
 
-    // list of threads
-    list_node thread_list_ = LIST_INITIAL_VALUE(thread_list_);
-    Mutex thread_list_lock_;
+    // the startup block until start() copies it out
+    uint8_t *args_ = nullptr;
+    size_t args_len_ = 0;
 
-    int retcode_;
-    state state_ = PROC_STATE_INITIAL;
+    // guards everything below
+    Mutex lock_;
+    state state_ = state::CREATED;
+    // each thread on the list holds a reference, dropped by the reaper after joining it
+    lk::list<thread> threads_;
+    uint32_t live_threads_ = 0;
+    int exit_code_ = 0;
 
-    event_t exit_event_ = EVENT_INITIAL_VALUE(exit_event_, false, 0);
-
-    // sbrk information
-    sbrk_state sbrk_state_;
+    event_t exit_event_;
 };
 
-void add_to_global_list(proc *p);
-
 } // namespace lkuser
-

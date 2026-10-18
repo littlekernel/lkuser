@@ -4,8 +4,6 @@
 #include <unistd.h>
 #include <sys/stat.h>
 
-#include <sys/lkuser_syscalls.h>
-
 extern void foo(void);
 
 volatile int bss_var;

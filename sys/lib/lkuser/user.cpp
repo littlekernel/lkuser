@@ -20,25 +20,21 @@
  * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
-#include "lkuser_priv.h"
-#include <lib/lkuser.h>
+// The ELF loader and the console's lkuser command.
 
+#include <kernel/vm.h>
+#include <lib/elf.h>
+#include <lib/fs.h>
+#include <lk/err.h>
+#include <lk/trace.h>
+#include <lktl/auto_call.h>
+#include <lktl/ref_ptr.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <lk/cpp.h>
-#include <lk/list.h>
-#include <lk/trace.h>
-#include <lk/err.h>
-#include <kernel/vm.h>
-#include <kernel/thread.h>
-#include <kernel/mutex.h>
-#include <lib/bio.h>
-#include <lib/cksum.h>
-#include <lib/elf.h>
-#include <lib/fs.h>
-#include <lk/init.h>
-#include <sys/lkuser_syscalls.h>
+#include <utility>
+
+#include "proc.h"
 
 #ifndef FS_MAX_PATH_LEN
 #define FS_MAX_PATH_LEN 256
@@ -48,7 +44,9 @@
 
 namespace lkuser {
 
-static char g_lkuser_fs_root[FS_MAX_PATH_LEN] = "/";
+namespace {
+
+char g_lkuser_fs_root[FS_MAX_PATH_LEN] = "/";
 
 const char* get_fs_root(void) {
     return g_lkuser_fs_root;
@@ -114,7 +112,7 @@ status_t resolve_fs_path(const char* path, char* out_path, size_t out_path_len) 
     return NO_ERROR;
 }
 
-static ssize_t elf_read_hook_file(struct elf_handle *handle, void *buf, uint64_t offset, size_t len) {
+ssize_t elf_read_hook_file(struct elf_handle *handle, void *buf, uint64_t offset, size_t len) {
     filehandle *fhandle = (filehandle *)handle->read_hook_arg;
 
     LTRACEF("handle %p, buf %p, offset %llu, len %#zx\n", handle, buf, offset, len);
@@ -122,13 +120,14 @@ static ssize_t elf_read_hook_file(struct elf_handle *handle, void *buf, uint64_t
     return fs_read_file(fhandle, buf, offset, len);
 }
 
-static status_t elf_mem_alloc(struct elf_handle *handle, void **ptr, size_t len, uint num, uint flags) {
+// The loader's segment allocator: a user mapping at the address the segment asks for.
+status_t elf_mem_alloc(struct elf_handle *handle, void **ptr, size_t len, uint num, uint flags) {
     LTRACEF("handle %p, ptr %p [%p], size %#zx, num %u, flags %#x\n", handle, ptr, *ptr, len, num, flags);
 
     proc *p = (proc *)handle->mem_alloc_hook_arg;
 
     char name[16];
-    snprintf(name, sizeof(name), "lkuser%u", num);
+    snprintf(name, sizeof(name), "image%u", num);
 
     // round the allocations down and up to page boundaries
     uintptr_t va = (uintptr_t)*ptr;
@@ -144,7 +143,7 @@ static status_t elf_mem_alloc(struct elf_handle *handle, void **ptr, size_t len,
 
     void *vaptr = (void *)va;
     // RWX: elf_load copies the segment in through this mapping, and lib/elf doesn't pass the segment's p_flags
-    status_t err = vmm_alloc(p->get_aspace(), name, len, &vaptr, 0, VMM_FLAG_VALLOC_SPECIFIC,
+    status_t err = vmm_alloc(p->aspace(), name, len, &vaptr, 0, VMM_FLAG_VALLOC_SPECIFIC,
                              ARCH_MMU_FLAG_PERM_USER | ARCH_MMU_FLAG_PERM_RWX_MASK);
     LTRACEF("vmm_alloc returns %d, ptr %p\n", err, vaptr);
 
@@ -154,126 +153,99 @@ static status_t elf_mem_alloc(struct elf_handle *handle, void **ptr, size_t len,
     return err;
 }
 
-static status_t lkuser_load_file(proc *proc, const char *file_name) {
-    status_t err;
+// Loads the ELF image at path into p's address space and returns its entry point.
+status_t load_image(proc *p, const char *path, vaddr_t *entry) {
     char resolved_path[FS_MAX_PATH_LEN];
-
-    LTRACE;
-
-    err = resolve_fs_path(file_name, resolved_path, sizeof(resolved_path));
+    status_t err = resolve_fs_path(path, resolved_path, sizeof(resolved_path));
     if (err < 0) {
-        TRACEF("failed to resolve file path '%s': %d\n", file_name, err);
         return err;
     }
 
-    /* switch to the address space we're loading into */
-    vmm_set_active_aspace(proc->get_aspace());
-
-    filehandle *handle;
-    err = fs_open_file(resolved_path, &handle);
+    filehandle *fhandle;
+    err = fs_open_file(resolved_path, &fhandle);
     if (err < 0) {
-        TRACEF("failed to open file %s (resolved from %s)\n", resolved_path, file_name);
+        return err;
+    }
+    auto close_file = lk::make_auto_call([fhandle]() { fs_close_file(fhandle); });
+
+    elf_handle_t elf;
+    err = elf_open_handle(&elf, &elf_read_hook_file, fhandle, false);
+    if (err < 0) {
+        return err;
+    }
+    auto close_elf = lk::make_auto_call([&elf]() { elf_close_handle(&elf); });
+    elf.mem_alloc_hook = &elf_mem_alloc;
+    elf.mem_alloc_hook_arg = p;
+
+    // elf_load writes the segments through their user mappings, so it runs on p's aspace
+    vmm_aspace_t *prev = vmm_set_active_aspace(p->aspace());
+    err = elf_load(&elf);
+    vmm_set_active_aspace(prev);
+    if (err < 0) {
         return err;
     }
 
-    proc::loader_state &ls = proc->get_loader_state();
-
-    /* create an elf handle */
-    err = elf_open_handle(&ls.elf, &elf_read_hook_file, handle, false);
-    LTRACEF("elf_open_handle returns %d\n", err);
-    if (err < 0) {
-        TRACEF("failed to open elf handle\n");
-        goto err;
+    if (!is_user_address(elf.entry)) {
+        return ERR_NOT_VALID;
     }
-
-    /* register a memory allocation callback */
-    ls.elf.mem_alloc_hook = &elf_mem_alloc;
-    ls.elf.mem_alloc_hook_arg = proc;
-
-    /* try to load the binary */
-    err = elf_load(&ls.elf);
-    LTRACEF("elf_load returns %d\n", err);
-    if (err < 0) {
-        TRACEF("failed to load elf file\n");
-        goto err;
-    }
-
-    /* the binary loaded properly */
-    ls.entry = ls.elf.entry;
-    ls.loaded = true;
-
-    fs_close_file(handle);
-    vmm_set_active_aspace(NULL);
-
-    return NO_ERROR;
-
-err:
-    if (handle) {
-        fs_close_file(handle);
-    }
-    vmm_set_active_aspace(NULL);
-    return err;
-}
-
-status_t lkuser_start_binary(proc *p, bool wait) {
-    DEBUG_ASSERT(p);
-
-    const auto ls = p->get_loader_state();
-    LTRACEF("proc %p, entry %#lx\n", p, ls.entry);
-
-    if (!ls.loaded) {
-        return ERR_NOT_READY;
-    }
-
-    thread *t = thread::create(p, ls.entry);
-    if (!t) {
-        // XXX free proc
-        return ERR_NO_MEMORY;
-    }
-
-    /* we're ready to run now */
-    p->start();
-
-    /* resume */
-    LTRACEF("resuming main thread\n");
-    t->resume();
-
-    if (wait) {
-        p->wait();
-    }
-
+    *entry = elf.entry;
     return NO_ERROR;
 }
+
+} // namespace
 
 } // namespace lkuser
 
 #if defined(WITH_LIB_CONSOLE)
 #include <lib/console.h>
 
-static int cmd_lkuser(int argc, const console_cmd_args *argv) {
-    int rc = 0;
+namespace {
 
+// loaded by "lkuser load", started by "lkuser run"
+struct {
+    lk::ref_ptr<lkuser::proc> p;
+    vaddr_t entry;
+} loaded;
+
+int cmd_lkuser(int argc, const console_cmd_args *argv) {
     if (argc < 2) {
 notenoughargs:
         printf("not enough arguments:\n");
 usage:
-        printf("%s load <path to binary>\n", argv[0].str);
+        printf("%s load <path to binary> [args...]\n", argv[0].str);
         printf("%s run [&]\n", argv[0].str);
         printf("%s root <path>\n", argv[0].str);
         return -1;
     }
 
-    static lkuser::proc *proc;
     if (!strcmp(argv[1].str, "load")) {
         if (argc < 3) {
             goto notenoughargs;
         }
-        if (!proc) {
-            proc = lkuser::proc::create();
+
+        // the process's arguments: the path and whatever follows it
+        constexpr int kMaxArgs = 16;
+        const char *args[kMaxArgs];
+        const int nargs = MIN(argc - 2, kMaxArgs);
+        for (int i = 0; i < nargs; i++) {
+            args[i] = argv[i + 2].str;
         }
-        status_t err;
-        err = lkuser_load_file(proc, argv[2].str);
-        printf("lkuser_load_file() returns %d, entry at %#lx\n", err, proc->get_loader_state().entry);
+
+        lk::ref_ptr<lkuser::proc> p;
+        status_t err = lkuser::proc::create(nargs, args, &p);
+        if (err < 0) {
+            printf("lkuser: creating a process for %s failed: %d\n", args[0], err);
+            return err;
+        }
+        vaddr_t entry;
+        err = lkuser::load_image(p.get(), args[0], &entry);
+        if (err < 0) {
+            printf("lkuser: loading %s failed: %d\n", args[0], err);
+            return err;
+        }
+        printf("lkuser: loaded %s as process %u, entry %#lx\n", args[0], p->pid(), entry);
+        loaded.p = std::move(p);
+        loaded.entry = entry;
     } else if (!strcmp(argv[1].str, "root")) {
         if (argc < 3) {
             printf("lkuser root is '%s'\n", lkuser::get_fs_root());
@@ -289,30 +261,35 @@ usage:
 
         printf("lkuser root set to '%s'\n", lkuser::get_fs_root());
     } else if (!strcmp(argv[1].str, "run")) {
-        if (!proc) {
+        if (!loaded.p) {
             printf("no loaded binary\n");
             return -1;
         }
 
-        bool wait = true;
-        if (argc > 2 && !strcmp(argv[2].str, "&")) {
-            wait = false;
-        }
+        const bool wait = !(argc > 2 && !strcmp(argv[2].str, "&"));
 
-        status_t err = lkuser_start_binary(proc, wait);
-        printf("lkuser_start_binary() returns %d\n", err);
-        proc = NULL;
+        // the reference keeps the process readable after it exits, until the wait is over
+        lk::ref_ptr<lkuser::proc> p = std::move(loaded.p);
+        status_t err = p->start(loaded.entry);
+        if (err < 0) {
+            printf("lkuser: starting process %u failed: %d\n", p->pid(), err);
+            return err;
+        }
+        if (wait) {
+            p->wait();
+        }
     } else {
         printf("unrecognized subcommand\n");
         goto usage;
     }
 
-    return rc;
+    return 0;
 }
+
+} // namespace
 
 STATIC_COMMAND_START
 STATIC_COMMAND("lkuser", "user space routines", &cmd_lkuser)
 STATIC_COMMAND_END(lkuser);
 
 #endif
-

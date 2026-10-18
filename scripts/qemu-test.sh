@@ -11,6 +11,9 @@
 # printed "<APP>: PASS" (the name upper-cased), every app exited with code 0, and the
 # kernel never panicked. The console log is kept for inspection.
 #
+# Each app is name[:arg...]: /bin/<name> runs with the arguments after it, so
+# "rawtest:a:b:c" runs "lkuser load /bin/rawtest a b c".
+#
 # usage: qemu-test.sh -a <arch> -k <lk.elf> -f <root.fat> -l <log> [-t <secs>] [-s <smp>] app...
 
 set -u
@@ -23,7 +26,7 @@ timeout_secs=60
 smp=1
 
 usage() {
-    echo "usage: $0 -a <arch> -k <lk.elf> -f <root.fat> -l <log> [-t <secs>] [-s <smp>] app..." >&2
+    echo "usage: $0 -a <arch> -k <lk.elf> -f <root.fat> -l <log> [-t <secs>] [-s <smp>] name[:arg...]..." >&2
     exit 2
 }
 
@@ -40,6 +43,10 @@ while getopts "a:k:f:l:t:s:" opt; do
 done
 shift $((OPTIND - 1))
 apps=("$@")
+names=()
+for app in "${apps[@]}"; do
+    names+=("${app%%:*}")
+done
 
 if [ -z "$arch" ] || [ -z "$kernel" ] || [ -z "$fsimage" ] || [ -z "$log" ] || [ ${#apps[@]} -eq 0 ]; then
     usage
@@ -65,7 +72,12 @@ done
 # '+' is a space to lib/cmdline; a literal space would end the argument
 autorun="mount+/fs+fat+virtio0;lkuser+root+/fs;"
 for app in "${apps[@]}"; do
-    autorun+="lkuser+load+/bin/$app;lkuser+run;"
+    IFS=: read -r -a parts <<<"$app"
+    load="lkuser+load+/bin/${parts[0]}"
+    for arg in "${parts[@]:1}"; do
+        load+="+$arg"
+    done
+    autorun+="$load;lkuser+run;"
 done
 autorun+="poweroff"
 if [ ${#autorun} -gt 511 ]; then
@@ -99,8 +111,8 @@ if grep -qE 'panic \(caller|ASSERT FAILED' <<<"$clean_log"; then
     fail=1
 fi
 
-for app in "${apps[@]}"; do
-    token="${app^^}: PASS"
+for name in "${names[@]}"; do
+    token="${name^^}: PASS"
     if ! grep -qxF "$token" <<<"$clean_log"; then
         echo "qemu-test: FAIL: no '$token'"
         fail=1
@@ -117,4 +129,4 @@ if [ $fail -ne 0 ]; then
     echo "qemu-test: FAIL (log: $log)"
     exit 1
 fi
-echo "qemu-test: PASS (${apps[*]})"
+echo "qemu-test: PASS (${names[*]})"

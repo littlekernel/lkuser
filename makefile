@@ -19,6 +19,9 @@ $(warning APP_RULES = $(APP_RULES))
 
 LIBS :=
 LIBS_EXTRADEPS :=
+
+# dependency files of every app and lib object
+DEPS :=
 LIB_RULES := $(shell find lib -name lib.mk)
 $(warning LIB_RULES = $(LIB_RULES))
 
@@ -45,7 +48,7 @@ GLOBAL_CFLAGS := --std=gnu99 -Werror-implicit-function-declaration -Wstrict-prot
 GLOBAL_CPPFLAGS := -fno-exceptions -fno-rtti -fno-threadsafe-statics
 GLOBAL_ASMFLAGS := -DASSEMBLY
 GLOBAL_LDFLAGS :=
-GLOBAL_INCLUDES := -I$(NEWLIB_INC_DIR) -Isys/lib/lkuser/include
+GLOBAL_INCLUDES := -I$(NEWLIB_INC_DIR) -Isys/lib/lkuser/include -Ilib/lku/include
 GLOBAL_LIBS := $(LIBC) $(LIBM)
 
 GLOBAL_COMPILEFLAGS += -ffunction-sections -fdata-sections
@@ -69,6 +72,8 @@ $(warning APPS = $(APPS))
 
 include $(LIB_RULES)
 $(warning LIBS = $(LIBS))
+
+-include $(DEPS)
 
 _all: lk apps libs
 
@@ -159,8 +164,9 @@ else ifeq ($(ARCH),riscv)
 	qemu-system-riscv64 -m 512 -smp 1 -machine virt -cpu rv64 -bios default -kernel build-$(LK_TESTPROJECT)/lk.elf -nographic -drive if=none,file=$(BUILDDIR)/root.fat,id=blk,format=raw -device virtio-blk-device,drive=blk
 endif
 
-# apps run in order by test-auto; each must print <APP>: PASS (upper-cased) and exit with code 0
-TEST_APPS ?= boottest
+# apps run in order by test-auto, each as name[:arg...]; each must print <NAME>: PASS
+# (upper-cased) and exit with code 0
+TEST_APPS ?= rawtest:a:b:c
 TEST_TIMEOUT ?= 60
 TEST_SMP ?= 1
 

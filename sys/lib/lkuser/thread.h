@@ -22,50 +22,53 @@
  */
 #pragma once
 
-#include <lk/list.h>
 #include <kernel/thread.h>
-#include <sys/lkuser_syscalls.h>
+#include <lk/cpp.h>
+#include <lktl/list.h>
+#include <lktl/ref_ptr.h>
+
+#include "object.h"
 
 namespace lkuser {
 
 class proc;
 
-class thread {
-private:
-    explicit thread(proc *p);
-
-    DISALLOW_COPY_ASSIGN_AND_MOVE(thread);
+// A user thread: an LK thread that enters user space in its process's address space. It
+// holds the LK thread's storage, so it must outlive the LK thread: the reaper joins the LK
+// thread before dropping the last reference.
+class thread : public object, public lk::list_hook<> {
 public:
-    ~thread();
+    // A suspended thread that will enter user space at entry with sp. Once created it must
+    // be resumed: LK cannot free a thread that never ran.
+    static status_t create(proc *p, vaddr_t entry, vaddr_t sp, lk::ref_ptr<thread> *out);
 
-    // factory to build threads
-    static thread *create(proc *p, vaddr_t entry);
+    // the lkuser thread on this cpu, or null on a kernel-only thread
+    static thread *current() { return reinterpret_cast<thread *>(tls_get(TLS_ENTRY_LKUSER)); }
 
-    // accessors
-    proc *get_proc() const { return proc_; }
-    vaddr_t get_entry() const { return entry_; }
-    void *get_stack() const { return user_stack_; }
+    proc *process() const { return proc_.get(); }
 
-    // operations on our thread
-    void resume() { thread_resume(&lkthread); }
-    void join() { thread_join(&lkthread, NULL, INFINITE_TIME); }
+    void resume() { thread_resume(&lkthread_); }
+    void join() { thread_join(&lkthread_, nullptr, INFINITE_TIME); }
 
-    // public for proc to maintain a list
-    list_node node = LIST_INITIAL_CLEARED_VALUE;
+    // set while the thread is inside a syscall
+    bool in_syscall() const { return in_syscall_; }
+    void set_in_syscall(bool in) { in_syscall_ = in; }
 
 private:
-    proc *proc_ = nullptr;
-    vaddr_t entry_ {};
+    friend class object;
 
-    void *user_stack_ = nullptr;
+    thread(proc *p, vaddr_t entry, vaddr_t sp);
+    ~thread();
+    DISALLOW_COPY_ASSIGN_AND_MOVE(thread);
 
-    thread_t lkthread {};
+    static int start_routine(void *arg);
+
+    lk::ref_ptr<proc> proc_;
+    const vaddr_t entry_;
+    const vaddr_t sp_;
+    bool in_syscall_ = false;
+
+    thread_t lkthread_ = {};
 };
-
-static inline thread *get_lkuser_thread() {
-    thread *t = (thread *)tls_get(TLS_ENTRY_LKUSER);
-    DEBUG_ASSERT(t);
-    return t;
-}
 
 } // namespace lkuser

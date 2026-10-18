@@ -21,14 +21,34 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-/* included from other files to define a syscall api */
-LK_SYSCALL_DEF(0, void,   exit,       int retcode)
-LK_SYSCALL_DEF(1, int,    open,       const char *name, int flags, int mode)
-LK_SYSCALL_DEF(2, int,    close,      int file)
-LK_SYSCALL_DEF(3, int,    write,      int file, const char *ptr, int len)
-LK_SYSCALL_DEF(4, int,    read,       int file, char *ptr, int len)
-LK_SYSCALL_DEF(5, int,    lseek,      int file, long pos, int whence)
-LK_SYSCALL_DEF(6, void *, sbrk,       long incr)
-LK_SYSCALL_DEF(7, int,    sleep_sec,  unsigned long useconds)
-LK_SYSCALL_DEF(8, int,    sleep_usec, unsigned long useconds)
+// The raw syscall table, one row per syscall: LK_SYSCALL_DEF(number, return type, name,
+// arguments...). Included with LK_SYSCALL_DEF defined by the user-space stubs (lib/lku) and by
+// the kernel's dispatcher (syscalls.cpp), after <sys/lk_abi.h>; both sides expand the same
+// rows, so numbers and signatures cannot skew.
+//
+// Trap ABI (riscv): number in a7, arguments in a0-a5, the result in a0, LK's NO_ERROR or a
+// negative ERR_*. Every argument fits one register on 32 and 64 bit; 64-bit values travel in
+// the argument structures. A row without a kernel handler returns ERR_NOT_SUPPORTED, as does
+// a number past the end of the table.
 
+LK_SYSCALL_DEF(0,  void,        exit,                  int code)
+LK_SYSCALL_DEF(1,  void,        thread_exit,           void)
+LK_SYSCALL_DEF(2,  lk_status_t, handle_close,          lk_handle_t h)
+LK_SYSCALL_DEF(3,  lk_status_t, handle_dup,            lk_handle_t h, uint32_t rights_mask, lk_handle_t *out)
+LK_SYSCALL_DEF(4,  lk_status_t, call,                  lk_handle_t conn, struct lk_call_args *args)
+LK_SYSCALL_DEF(5,  lk_status_t, recv,                  lk_handle_t h, struct lk_recv_args *args)
+LK_SYSCALL_DEF(6,  lk_status_t, msg_read,              lk_token_t token, size_t off, const struct lk_iov *iov, size_t n)
+LK_SYSCALL_DEF(7,  lk_status_t, msg_write,             lk_token_t token, size_t off, const struct lk_iov *iov, size_t n)
+LK_SYSCALL_DEF(8,  lk_status_t, reply,                 lk_token_t token, const struct lk_reply_args *args)
+LK_SYSCALL_DEF(9,  lk_status_t, impulse_send,          lk_handle_t conn, const struct lk_impulse *imp)
+LK_SYSCALL_DEF(10, lk_status_t, endpoint_create,       const struct lk_endpoint_args *args, lk_handle_t *out)
+LK_SYSCALL_DEF(11, lk_status_t, connect,               lk_handle_t ep, lk_handle_t *out)
+LK_SYSCALL_DEF(12, lk_status_t, connection_accept,     lk_token_t token, uintptr_t cookie, lk_handle_t *peer_out)
+LK_SYSCALL_DEF(13, lk_status_t, connection_refuse,     lk_token_t token)
+LK_SYSCALL_DEF(14, lk_status_t, connection_set_cookie, lk_handle_t peer, uintptr_t cookie)
+LK_SYSCALL_DEF(15, lk_status_t, connection_signal,     lk_handle_t peer, uint32_t set, uint32_t clear)
+LK_SYSCALL_DEF(16, lk_status_t, group_create,          lk_handle_t *out)
+LK_SYSCALL_DEF(17, lk_status_t, group_add,             lk_handle_t group, lk_handle_t ep)
+LK_SYSCALL_DEF(18, lk_status_t, group_remove,          lk_handle_t group, lk_handle_t ep)
+LK_SYSCALL_DEF(19, lk_status_t, wait,                  struct lk_wait_args *args)
+LK_SYSCALL_DEF(20, lk_status_t, debug_write,           const char *buf, size_t len)

@@ -40,7 +40,7 @@ $(APP): APP_LIBS := $(APP_LIBS)
 $(APP): $(_APP_OBJS) $(ARCH_LINKER_SCRIPT) $(APP_LIBS) $(GLOBAL_LIBS)
 	@$(MKDIR)
 	@echo linking $@
-	$(NOECHO)$(ARCH_LD) $(GLOBAL_LDFLAGS) $(ARCH_LDFLAGS) $(CRT0) $(_APP_OBJS) $(EXTRA_OBJS) $(APP_LIBS) $(GLOBAL_LIBS) $(LIBGCC) -o $@
+	$(NOECHO)$(ARCH_LD) $(GLOBAL_LDFLAGS) $(ARCH_LDFLAGS) $(CRT0) $(_APP_OBJS) $(EXTRA_OBJS) --start-group $(APP_LIBS) $(GLOBAL_LIBS) --end-group $(LIBGCC) -o $@
 
 $(APP).lst: $(APP)
 	@$(MKDIR)
@@ -56,6 +56,9 @@ $(APP).strip: $(APP)
 	@$(MKDIR)
 	@echo generating $@
 	$(NOECHO)$(ARCH_STRIP) -d $< -o $@
+
+# the compile rules write a .d file next to each object; the top level makefile reads them
+DEPS += $(_APP_OBJS:%.o=%.d)
 
 # add ourself to the build list
 APPS += $(APP)

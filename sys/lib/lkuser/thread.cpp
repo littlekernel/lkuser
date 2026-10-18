@@ -22,72 +22,43 @@
  */
 #include "thread.h"
 
+#include <arch.h>
 #include <lk/err.h>
-#include <lk/trace.h>
-#include <kernel/thread.h>
-#include <kernel/vm.h>
+#include <new>
 
 #include "proc.h"
 
-#define LOCAL_TRACE 0
-
 namespace lkuser {
 
-thread::thread(proc *p) : proc_(p) {}
+thread::thread(proc *p, vaddr_t entry, vaddr_t sp)
+    : object(obj_kind::THREAD), proc_(p), entry_(entry), sp_(sp) {}
+
 thread::~thread() = default;
 
-int lkuser_start_routine(void *arg) {
-    thread *t = (thread *)arg;
+int thread::start_routine(void *arg) {
+    thread *t = static_cast<thread *>(arg);
 
-    /* set our per-thread pointer */
-    __tls_set(TLS_ENTRY_LKUSER, (uintptr_t)t);
-
-    /* switch to user mode and start the thread */
-    arch_enter_uspace(t->get_entry(),
-                      (uintptr_t)t->get_stack() + PAGE_SIZE);
+    tls_set(TLS_ENTRY_LKUSER, reinterpret_cast<uintptr_t>(t));
+    arch_enter_uspace(t->entry_, t->sp_);
 
     __UNREACHABLE;
 }
 
-thread *thread::create(proc *p, vaddr_t entry) {
-    thread *t;
-    t = new thread(p);
+status_t thread::create(proc *p, vaddr_t entry, vaddr_t sp, lk::ref_ptr<thread> *out) {
+    lk::ref_ptr<thread> t = lk::adopt_ref(new (std::nothrow) thread(p, entry, sp));
     if (!t) {
-        TRACEF("error allocating thread state\n");
-        return NULL;
+        return ERR_NO_MEMORY;
     }
 
-    t->entry_ = entry;
-
-    // create the lk side of the thread
-    thread_t *lkthread = thread_create_etc(&t->lkthread, "lkuser", lkuser_start_routine, t, LOW_PRIORITY, NULL, DEFAULT_STACK_SIZE);
-    if (!lkthread) {
-        TRACEF("error creating thread\n");
-        delete t;
-        return nullptr;
+    if (!thread_create_etc(&t->lkthread_, p->name(), &start_routine, t.get(), LOW_PRIORITY,
+                           nullptr, DEFAULT_STACK_SIZE)) {
+        return ERR_NO_MEMORY;
     }
-    DEBUG_ASSERT(lkthread == &t->lkthread);
+    // the LK thread runs in the process's address space from its first instruction
+    t->lkthread_.aspace = p->aspace();
 
-    // set the address space for this thread
-    t->lkthread.aspace = p->get_aspace();
-
-    // create a user stack for the new thread
-    // TODO: move this logic elsewhere and/or generally make it a user space problem
-    status_t err = vmm_alloc(p->get_aspace(), "lkuser_user_stack", PAGE_SIZE, &t->user_stack_, PAGE_SIZE_SHIFT,
-                             0, ARCH_MMU_FLAG_PERM_USER | ARCH_MMU_FLAG_PERM_READ | ARCH_MMU_FLAG_PERM_WRITE);
-    LTRACEF("vmm_alloc returns %d, stack at %p\n", err, t->user_stack_);
-    DEBUG_ASSERT(err >= NO_ERROR);
-
-    // add ourselves to the parent process
-    err = p->add_thread(t);
-    if (err < 0) {
-        // XXX clean up the LK thread
-        panic("failed addition of thread to process\n");
-        return nullptr;
-    }
-
-    return t;
+    *out = std::move(t);
+    return NO_ERROR;
 }
 
 } // namespace lkuser
-

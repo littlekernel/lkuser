@@ -12,7 +12,6 @@ jobs:
       matrix:
         toolchain-ver: [11.2.0]
         arch:
-          - arm
           - riscv
 
     env:

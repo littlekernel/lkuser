@@ -20,229 +20,151 @@
  * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
-#include "lkuser_priv.h"
+#include "syscalls.h"
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <lk/trace.h>
-#include <lk/list.h>
-#include <kernel/vm.h>
 #include <kernel/thread.h>
 #include <lk/err.h>
-#include <lib/elf.h>
-#include <lib/bio.h>
-#include <sys/lkuser_syscalls.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <type_traits>
+#include <utility>
 
-#include "lkuser_priv.h"
+#include "copy.h"
+#include "proc.h"
+#include "thread.h"
 
-#define LOCAL_TRACE 0
+// after <lk/err.h>: a user-space status code that differs from LK's is a macro redefinition
+#include <sys/lk_err.h>
 
-using namespace lkuser;
+namespace lkuser {
 
-void sys_exit(int retcode) {
-    LTRACEF("retcode %d\n", retcode);
-
-    auto *t = get_lkuser_thread();
-    DEBUG_ASSERT(t);
-
-    // XXX check that we're the last thread in this process
-    t->get_proc()->exit(retcode);
-
-    thread_exit(retcode);
+void sys_exit(int code) {
+    thread::current()->process()->exit(code);
+    thread_exit(code);
 }
 
-int sys_write(int file, const char *ptr, int len) {
-    LTRACEF("file %d, ptr %p, len %d\n", file, ptr, len);
+void sys_thread_exit() {
+    proc *p = thread::current()->process();
+    if (p->thread_exiting()) {
+        p->exit(0);
+    }
+    thread_exit(0);
+}
 
-    if (file == 1 || file == 2) {
-        for (int i = 0; i < len; i++) {
-            fputc(ptr[i], stdout);
+// Writes the bytes as they are, with nothing added, straight to the kernel console.
+status_t sys_debug_write(user_ptr<const char> buf, size_t len) {
+    vmm_aspace_t *aspace = thread::current()->process()->aspace();
+    // the whole range up front, so a bad length prints nothing
+    if (!user_range_valid(aspace, buf.addr(), len)) {
+        return ERR_FAULT;
+    }
+
+    char kbuf[128];
+    for (size_t done = 0; done < len;) {
+        const size_t chunk = MIN(len - done, sizeof(kbuf));
+        status_t err = copy_from_user(aspace, kbuf, buf.addr() + done, chunk);
+        if (err < 0) {
+            return err;
         }
+        fwrite(kbuf, 1, chunk, stdout);
+        done += chunk;
     }
-
-    return len;
+    return NO_ERROR;
 }
 
-int sys_open(const char *name, int flags, int mode) {
-    LTRACEF("name '%s', flags 0x%x, mode 0x%x\n", name, flags, mode);
+// Rows this executive does not serve.
+status_t sys_handle_close(lk_handle_t) { return ERR_NOT_SUPPORTED; }
+status_t sys_handle_dup(lk_handle_t, uint32_t, user_ptr<lk_handle_t>) { return ERR_NOT_SUPPORTED; }
+status_t sys_call(lk_handle_t, user_ptr<lk_call_args>) { return ERR_NOT_SUPPORTED; }
+status_t sys_recv(lk_handle_t, user_ptr<lk_recv_args>) { return ERR_NOT_SUPPORTED; }
+status_t sys_msg_read(lk_token_t, size_t, user_ptr<const lk_iov>, size_t) { return ERR_NOT_SUPPORTED; }
+status_t sys_msg_write(lk_token_t, size_t, user_ptr<const lk_iov>, size_t) { return ERR_NOT_SUPPORTED; }
+status_t sys_reply(lk_token_t, user_ptr<const lk_reply_args>) { return ERR_NOT_SUPPORTED; }
+status_t sys_impulse_send(lk_handle_t, user_ptr<const lk_impulse>) { return ERR_NOT_SUPPORTED; }
+status_t sys_endpoint_create(user_ptr<const lk_endpoint_args>, user_ptr<lk_handle_t>) { return ERR_NOT_SUPPORTED; }
+status_t sys_connect(lk_handle_t, user_ptr<lk_handle_t>) { return ERR_NOT_SUPPORTED; }
+status_t sys_connection_accept(lk_token_t, uintptr_t, user_ptr<lk_handle_t>) { return ERR_NOT_SUPPORTED; }
+status_t sys_connection_refuse(lk_token_t) { return ERR_NOT_SUPPORTED; }
+status_t sys_connection_set_cookie(lk_handle_t, uintptr_t) { return ERR_NOT_SUPPORTED; }
+status_t sys_connection_signal(lk_handle_t, uint32_t, uint32_t) { return ERR_NOT_SUPPORTED; }
+status_t sys_group_create(user_ptr<lk_handle_t>) { return ERR_NOT_SUPPORTED; }
+status_t sys_group_add(lk_handle_t, lk_handle_t) { return ERR_NOT_SUPPORTED; }
+status_t sys_group_remove(lk_handle_t, lk_handle_t) { return ERR_NOT_SUPPORTED; }
+status_t sys_wait(user_ptr<lk_wait_args>) { return ERR_NOT_SUPPORTED; }
 
-    return -1;
-}
+namespace {
 
-int sys_close(int file) {
-    LTRACEF("file %d\n", file);
+constexpr size_t kArgRegs = 6;
 
-    return -1;
-}
-
-int sys_read(int file, char *ptr, int len) {
-    LTRACEF("file %d, ptr %p, len %d\n", file, ptr, len);
-
-    if (len <= 0)
-        return 0;
-
-    if (file == 0) {
-        /* trying to read from stdin */
-        int c = getchar();
-        if (c >= 0) {
-            /* translate \r -> \n */
-            if (c == '\r') c = '\n';
-
-            ptr[0] = c;
-            return 1;
-        }
-
-        return 0;
-    } else {
-        /* bad file descriptor */
-        return -1;
-    }
-}
-
-int sys_lseek(int file, long pos, int whence) {
-    LTRACEF("file %d, pos %ld, whence %d\n", file, pos, whence);
-
-    return -1;
-}
-
-void *sys_sbrk(long incr) {
-    void *ptr;
-
-    LTRACEF("incr %ld\n", incr);
-
-    auto *t = get_lkuser_thread();
-    proc *p = t->get_proc();
-    auto ss = p->get_sbrk_state();
-
-    if (incr < 0)
-        return NULL;
-
-    if (incr == 0)
-        return (void *)ss.last_sbrk;
-
-    if (ss.last_sbrk != 0 && ss.last_sbrk + incr <= ss.last_sbrk_top) {
-        LTRACEF("still have space in the last allocation: last_sbrk 0x%lx, last_sbrk_top 0x%lx\n", ss.last_sbrk, ss.last_sbrk_top);
-        ptr = (void *)ss.last_sbrk;
-        ss.last_sbrk += incr;
-        return ptr;
-    }
-
-#define HEAP_ALLOC_CHUNK_SIZE (PAGE_SIZE * 16)
-
-    /* allocate a new chunk for the heap */
-    size_t alloc_size = ROUNDUP(incr, HEAP_ALLOC_CHUNK_SIZE);
-    status_t err = vmm_alloc(t->get_proc()->get_aspace(), "heap", alloc_size, &ptr, PAGE_SIZE_SHIFT,
-                             0, ARCH_MMU_FLAG_PERM_USER | ARCH_MMU_FLAG_PERM_READ | ARCH_MMU_FLAG_PERM_WRITE);
-
-    ss.last_sbrk = (uintptr_t)ptr + incr;
-    ss.last_sbrk_top = (uintptr_t)ptr + HEAP_ALLOC_CHUNK_SIZE;
-
-    LTRACEF("vmm_alloc returns %d, ptr at %p, last_sbrk now 0x%lx, top 0x%lx\n", err, ptr, ss.last_sbrk, ss.last_sbrk_top);
-
-    return (err >= 0) ? ptr : NULL;
-}
-
-int sys_sleep_sec(unsigned long seconds) {
-    LTRACEF("seconds %lu\n", seconds);
-
-    thread_sleep(seconds * 1000U);
-    return 0;
-}
-
-int sys_sleep_usec(unsigned long useconds) {
-    LTRACEF("useconds %lu\n", useconds);
-
-    thread_sleep(useconds / 1000U);
-    return 0;
-}
-
-int sys_invalid_syscall(void) {
-    LTRACEF("invalid syscall\n");
-    return ERR_INVALID_ARGS;
-}
-
-const struct lkuser_syscall_table lkuser_syscalls = {
-    .exit = &sys_exit,
-    .open = &sys_open,
-    .close = &sys_close,
-    .write = &sys_write,
-    .read = &sys_read,
-    .lseek = &sys_lseek,
-    .sbrk = &sys_sbrk,
-    .sleep_sec = &sys_sleep_sec,
-    .sleep_usec = &sys_sleep_usec,
+// A register as a handler argument: an integer keeps its low bits, whatever user space left
+// above them, and a user pointer keeps the address.
+template <typename T>
+struct from_reg {
+    static_assert(std::is_integral_v<T> || std::is_enum_v<T>, "a row argument is an integer or a pointer");
+    static_assert(sizeof(T) <= sizeof(ulong), "a row argument fits one register");
+    static T get(ulong r) { return static_cast<T>(r); }
+};
+template <typename T>
+struct from_reg<user_ptr<T>> {
+    static user_ptr<T> get(ulong r) { return user_ptr<T>(r); }
 };
 
-#if ARCH_ARM
-extern "C"
-void arm_syscall_handler(struct arm_fault_frame *frame) {
-    /* re-enable interrupts to maintain kernel preemptiveness */
-    arch_enable_ints();
-
-    LTRACEF("arm syscall: r12 %u\n", frame->r[12]);
-
-    /* build a function pointer to call the routine.
-     * the args are jammed into the function independent of if the function
-     * uses them or not, which is safe for simple arg passing.
-     */
-    int64_t (*sfunc)(unsigned long a, unsigned long b, unsigned long c, unsigned long d);
-
-    switch (frame->r[12]) {
-#define LK_SYSCALL_DEF(n, ret, name, args...) \
-        case n: sfunc = reinterpret_cast<decltype(sfunc)>((uintptr_t)sys_##name); break;
-#include <sys/_syscalls.h>
-#undef LK_SYSCALL_DEF
-        default:
-            sfunc = reinterpret_cast<decltype(sfunc)>((uintptr_t)sys_invalid_syscall);
+template <typename R, typename... A, size_t... I>
+long invoke(R (*handler)(A...), [[maybe_unused]] const ulong *regs, std::index_sequence<I...>) {
+    static_assert(sizeof...(A) <= kArgRegs, "a row takes at most six arguments");
+    if constexpr (std::is_void_v<R>) {
+        handler(from_reg<A>::get(regs[I])...);
+        return NO_ERROR;
+    } else {
+        static_assert(std::is_same_v<R, status_t>, "a row returns void or a status");
+        return handler(from_reg<A>::get(regs[I])...);
     }
-
-    LTRACEF("func %p\n", sfunc);
-
-    /* call the routine */
-    uint64_t ret = sfunc(frame->r[0], frame->r[1], frame->r[2], frame->r[3]);
-
-    /* unpack the 64bit return back into r0 and r1 */
-    frame->r[0] = ret & 0xffffffff;
-    frame->r[1] = (ret >> 32) & 0xffffffff;
 }
-#endif
-#if ARCH_RISCV
-#include <arch/riscv/iframe.h>
-extern "C"
-void riscv_syscall_handler(struct riscv_short_iframe *frame) {
-    /* re-enable interrupts to maintain kernel preemptiveness */
-    arch_enable_ints();
 
-    LTRACEF("riscv syscall: t0 %lu\n", frame->t0);
+template <typename R, typename... A>
+long invoke(R (*handler)(A...), const ulong *regs) {
+    return invoke(handler, regs, std::index_sequence_for<A...>{});
+}
 
-    /* build a function pointer to call the routine.
-     * the args are jammed into the function independent of if the function
-     * uses them or not, which is safe for simple arg passing.
-     */
-    int64_t (*sfunc)(unsigned long a, unsigned long b, unsigned long c, unsigned long d);
-
-    switch (frame->t0) {
+long dispatch(ulong num, const ulong *regs) {
+    switch (num) {
 #define LK_SYSCALL_DEF(n, ret, name, args...) \
-        case n: sfunc = reinterpret_cast<decltype(sfunc)>((uintptr_t)sys_##name); break;
+        case n: \
+            return invoke(&sys_##name, regs);
 #include <sys/_syscalls.h>
 #undef LK_SYSCALL_DEF
         default:
-            sfunc = reinterpret_cast<decltype(sfunc)>((uintptr_t)sys_invalid_syscall);
+            return ERR_NOT_SUPPORTED;
+    }
+}
+
+} // namespace
+
+} // namespace lkuser
+
+#if ARCH_RISCV
+#include <arch/riscv.h>
+#include <arch/riscv/iframe.h>
+
+// Number in a7, arguments in a0-a5, the status back in a0. The arch has already stepped epc
+// past the ecall.
+extern "C" void riscv_syscall_handler(struct riscv_short_iframe *frame) {
+    lkuser::thread *t = lkuser::thread::current();
+    if (!t) {
+        riscv_syscall_unhandled(frame);
     }
 
-    LTRACEF("func %p\n", sfunc);
+    // handlers block, take mutexes and copy user memory, none of which works with
+    // interrupts disabled
+    arch_enable_ints();
+    t->set_in_syscall(true);
 
-    /* call the routine */
-    uint64_t ret = sfunc(frame->a0, frame->a1, frame->a2, frame->a3);
+    const ulong regs[lkuser::kArgRegs] = {
+        frame->a0, frame->a1, frame->a2, frame->a3, frame->a4, frame->a5,
+    };
+    frame->a0 = static_cast<ulong>(lkuser::dispatch(frame->a7, regs));
 
-    /* unpack the 64bit return back into a0 and a1 */
-    frame->a0 = ret & 0xffffffff;
-    frame->a1 = (ret >> 32) & 0xffffffff;
-
-    /* the arch already stepped epc past the ecall */
+    t->set_in_syscall(false);
     arch_disable_ints();
 }
 #endif
-
-

@@ -10,7 +10,8 @@ LIB := $(LIB_BUILDDIR)/$(LIB_NAME).a
 #$(warning LIB = $(LIB))
 
 LIB_CFLAGS :=
-LIB_SRCS := $(LOCAL_DIR)/liblk.c
-LIB_SRCS += $(LOCAL_DIR)/crt0_$(ARCH).S
+LIB_SRCS := $(LOCAL_DIR)/crt0_$(ARCH).S
+LIB_SRCS += $(LOCAL_DIR)/newlib.c
+LIB_SRCS += $(LOCAL_DIR)/syscalls.c
 
 include make/lib.mk
