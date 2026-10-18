@@ -159,6 +159,15 @@ else ifeq ($(ARCH),riscv)
 	qemu-system-riscv64 -m 512 -smp 1 -machine virt -cpu rv64 -bios default -kernel build-$(LK_TESTPROJECT)/lk.elf -nographic -drive if=none,file=$(BUILDDIR)/root.fat,id=blk,format=raw -device virtio-blk-device,drive=blk
 endif
 
-.PHONY: all _all apps fs lk clean clean-apps spotless newlib build-newlib configure-newlib clean-newlib list-toolchain
+# apps run in order by test-auto; each must print <APP>: PASS (upper-cased) and exit with code 0
+TEST_APPS ?= boottest
+TEST_TIMEOUT ?= 60
+TEST_SMP ?= 1
+
+test-auto: _all fs
+	scripts/qemu-test.sh -a $(ARCH) -k build-$(LK_TESTPROJECT)/lk.elf -f $(BUILDDIR)/root.fat \
+		-l $(BUILDDIR)/test-auto.log -t $(TEST_TIMEOUT) -s $(TEST_SMP) $(TEST_APPS)
+
+.PHONY: all _all apps fs lk clean clean-apps spotless newlib build-newlib configure-newlib clean-newlib list-toolchain test test-auto
 
 # vim: set noexpandtab ts=4 sw=4:

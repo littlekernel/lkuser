@@ -118,6 +118,7 @@ void proc::start() {
 }
 
 void proc::exit(int retcode) {
+    printf("lkuser: process %p exited with code %d\n", this, retcode);
     state_ = proc::PROC_STATE_DEAD;
     retcode = retcode;
     event_signal(&exit_event_, true);

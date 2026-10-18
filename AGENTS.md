@@ -13,6 +13,7 @@ Run from repository root:
 ```bash
 make -j $(nproc)     # build everything: newlib (first time), LK kernel, user apps/libs
 make test            # build + generate FAT image + boot QEMU (exit QEMU with Ctrl-A X)
+make test-auto       # build + boot QEMU non-interactively, run the test apps, pass/fail (riscv only)
 make clean           # clean kernel + user-space outputs (keeps newlib)
 make spotless        # also remove newlib build/install trees
 make fs              # just regenerate build-$(ARCH)/root.fat
@@ -21,7 +22,14 @@ make list-toolchain  # print the required cross toolchain prefix
 
 Architecture is selected with `ARCH` (default `riscv` in the top-level `makefile`); e.g. `ARCH=arm make -j $(nproc)`. Never assume host architecture — always check/propagate `ARCH` on build and test targets. Toolchain prefixes come from `arch/<arch>/arch.mk`: `riscv64-elf-` for riscv, `arm-eabi-` for arm (overridable via `TOOLCHAIN_PREFIX`, and CI fetches prebuilt ones from newos.org/toolchains). Building the FAT image requires mtools (`mformat`/`mcopy`); `make test` requires `qemu-system-riscv64` or `qemu-system-arm`.
 
-There is no unit-test suite; `make test` is an interactive QEMU boot. Local make overrides can go in an untracked `local.mk` (auto-included).
+`make test` is an interactive QEMU boot. `make test-auto` is the gate (`scripts/qemu-test.sh`, riscv only): an `lk.autorun` script mounts the image, runs each app in `TEST_APPS` with `lkuser load`/`run`, and powers off, with stdin closed. It passes only if:
+- QEMU powered off by itself within `TEST_TIMEOUT` seconds (default 60; a run takes well under a second),
+- no kernel panic or assert was logged,
+- every app printed the exact line `<APP>: PASS` (name upper-cased) and its process logged `exited with code 0`.
+
+The console log is kept in `build-$(ARCH)/test-auto.log`. `TEST_APPS` defaults to `boottest` (static data, float, malloc, sbrk, exit; reads no input); `TEST_SMP` sets `-smp`.
+
+Local make overrides can go in an untracked `local.mk` (auto-included).
 
 ## Architecture: Two Build Systems, One Makefile
 
