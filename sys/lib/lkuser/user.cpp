@@ -143,7 +143,9 @@ static status_t elf_mem_alloc(struct elf_handle *handle, void **ptr, size_t len,
     LTRACEF("aligned va %#lx size %#zx\n", va, len);
 
     void *vaptr = (void *)va;
-    status_t err = vmm_alloc(p->get_aspace(), name, len, &vaptr, 0, VMM_FLAG_VALLOC_SPECIFIC, ARCH_MMU_FLAG_PERM_USER);
+    // RWX: elf_load copies the segment in through this mapping, and lib/elf doesn't pass the segment's p_flags
+    status_t err = vmm_alloc(p->get_aspace(), name, len, &vaptr, 0, VMM_FLAG_VALLOC_SPECIFIC,
+                             ARCH_MMU_FLAG_PERM_USER | ARCH_MMU_FLAG_PERM_RWX_MASK);
     LTRACEF("vmm_alloc returns %d, ptr %p\n", err, vaptr);
 
     *ptr = (void *)((uintptr_t)vaptr + aligndiff);

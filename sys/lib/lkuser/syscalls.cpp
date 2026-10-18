@@ -133,7 +133,7 @@ void *sys_sbrk(long incr) {
     /* allocate a new chunk for the heap */
     size_t alloc_size = ROUNDUP(incr, HEAP_ALLOC_CHUNK_SIZE);
     status_t err = vmm_alloc(t->get_proc()->get_aspace(), "heap", alloc_size, &ptr, PAGE_SIZE_SHIFT,
-                             0, ARCH_MMU_FLAG_PERM_USER | ARCH_MMU_FLAG_PERM_NO_EXECUTE);
+                             0, ARCH_MMU_FLAG_PERM_USER | ARCH_MMU_FLAG_PERM_READ | ARCH_MMU_FLAG_PERM_WRITE);
 
     ss.last_sbrk = (uintptr_t)ptr + incr;
     ss.last_sbrk_top = (uintptr_t)ptr + HEAP_ALLOC_CHUNK_SIZE;

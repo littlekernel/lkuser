@@ -74,7 +74,7 @@ thread *thread::create(proc *p, vaddr_t entry) {
     // create a user stack for the new thread
     // TODO: move this logic elsewhere and/or generally make it a user space problem
     status_t err = vmm_alloc(p->get_aspace(), "lkuser_user_stack", PAGE_SIZE, &t->user_stack_, PAGE_SIZE_SHIFT,
-                             0, ARCH_MMU_FLAG_PERM_USER | ARCH_MMU_FLAG_PERM_NO_EXECUTE);
+                             0, ARCH_MMU_FLAG_PERM_USER | ARCH_MMU_FLAG_PERM_READ | ARCH_MMU_FLAG_PERM_WRITE);
     LTRACEF("vmm_alloc returns %d, stack at %p\n", err, t->user_stack_);
     DEBUG_ASSERT(err >= NO_ERROR);
 
