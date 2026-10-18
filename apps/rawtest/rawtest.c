@@ -6,67 +6,14 @@
  * https://opensource.org/licenses/MIT
  */
 
-// Raw ABI test with no libc, run as "rawtest a b c": user entry, the startup block, the trap
-// ABI, debug_write and the kernel's checks on the user pointers it is given, a row with no
-// handler, a number past the table, and exit. Prints RAWTEST: PASS and exits with 0 when
-// every check holds; each failed check prints a RAWTEST: FAIL line and the exit code is 1.
+// Raw ABI test with no libc, run as "rawtest a b c": user entry, the startup block and its
+// handles, the trap ABI, debug_write and the kernel's checks on the user pointers it is given,
+// a row with no handler, a number past the table, and exit. Prints RAWTEST: PASS and exits
+// with 0 when every check holds; each failed check prints a RAWTEST: FAIL line and the exit
+// code is 1.
 
-#include <lk/ipc.h>
-
-static int failures;
-
-static size_t str_len(const char *s) {
-    size_t n = 0;
-    while (s[n]) {
-        n++;
-    }
-    return n;
-}
-
-static int str_eq(const char *a, const char *b) {
-    while (*a && *a == *b) {
-        a++;
-        b++;
-    }
-    return *a == *b;
-}
-
-static int ends_with(const char *s, const char *suffix) {
-    const size_t n = str_len(s);
-    const size_t m = str_len(suffix);
-    return n >= m && str_eq(s + n - m, suffix);
-}
-
-static void put(const char *s) {
-    lk_debug_write(s, str_len(s));
-}
-
-static void put_dec(unsigned v) {
-    char buf[12];
-    char *p = buf + sizeof(buf);
-    *--p = '\0';
-    do {
-        *--p = (char)('0' + v % 10);
-        v /= 10;
-    } while (v);
-    put(p);
-}
-
-static void fail(int line, const char *what) {
-    put("RAWTEST: FAIL line ");
-    put_dec((unsigned)line);
-    put(": ");
-    put(what);
-    put("\n");
-    failures++;
-}
-
-#define CHECK(cond)                    \
-    do {                               \
-        if (!(cond)) {                 \
-            fail(__LINE__, #cond);     \
-        }                              \
-    } while (0)
+#define TEST_NAME "RAWTEST"
+#include <lktest.h>
 
 // a syscall by number, bypassing the stubs
 static lk_status_t raw_syscall(unsigned long num) {
@@ -79,55 +26,63 @@ static lk_status_t raw_syscall(unsigned long num) {
 static void test_startup_block(const struct lk_proc_args *args) {
     // sp pointed at the block, aligned as the calling convention asks
     CHECK(((uintptr_t)args & 15) == 0);
-    CHECK(args->nargs == 4);
-    CHECK(args->nhandles == 0);
+    CHECK_EQ(args->nargs, 4);
     if (args->nargs == 4) {
-        CHECK(ends_with(lk_proc_args_arg(args, 0), "/rawtest"));
-        CHECK(str_eq(lk_proc_args_arg(args, 1), "a"));
-        CHECK(str_eq(lk_proc_args_arg(args, 2), "b"));
-        CHECK(str_eq(lk_proc_args_arg(args, 3), "c"));
+        CHECK(test_ends_with(lk_proc_args_arg(args, 0), "/rawtest"));
+        CHECK(test_streq(lk_proc_args_arg(args, 1), "a"));
+        CHECK(test_streq(lk_proc_args_arg(args, 2), "b"));
+        CHECK(test_streq(lk_proc_args_arg(args, 3), "c"));
     }
-    put("RAWTEST: startup block ok\n");
+
+    // a handle per service the build has, each a real and distinct handle under its own tag;
+    // every build has a console
+    const struct lk_proc_handle *h = lk_proc_args_handles(args);
+    CHECK(args->nhandles > 0);
+    for (uint32_t i = 0; i < args->nhandles; i++) {
+        CHECK(h[i].handle != LK_HANDLE_INVALID);
+        for (uint32_t j = 0; j < i; j++) {
+            CHECK(h[i].handle != h[j].handle);
+            CHECK(h[i].tag != h[j].tag);
+        }
+    }
+    CHECK(lk_proc_args_find(args, LK_TAG_CONSOLE) != LK_HANDLE_INVALID);
+    CHECK(lk_proc_args_find(args, 0) == LK_HANDLE_INVALID);
+    test_put("RAWTEST: startup block ok\n");
 }
 
 static void test_debug_write(void) {
     static const char msg[] = "RAWTEST: debug_write ok\n";
-    CHECK(lk_debug_write(msg, sizeof(msg) - 1) == NO_ERROR);
-    CHECK(lk_debug_write(msg, 0) == NO_ERROR);
+    CHECK_EQ(lk_debug_write(msg, sizeof(msg) - 1), NO_ERROR);
+    CHECK_EQ(lk_debug_write(msg, 0), NO_ERROR);
 
     // below the user address space, and in the kernel's: refused by the range check
-    CHECK(lk_debug_write((const char *)0x1000, 4) == ERR_FAULT);
-    CHECK(lk_debug_write((const char *)(UINTPTR_MAX - 0xfff), 4) == ERR_FAULT);
+    CHECK_EQ(lk_debug_write((const char *)0x1000, 4), ERR_FAULT);
+    CHECK_EQ(lk_debug_write((const char *)(UINTPTR_MAX - 0xfff), 4), ERR_FAULT);
     // a length that runs off the end of the address space
-    CHECK(lk_debug_write(msg, SIZE_MAX) == ERR_FAULT);
+    CHECK_EQ(lk_debug_write(msg, SIZE_MAX), ERR_FAULT);
     // inside the address space but far above the image and stack near its base, so
     // unmapped: refused by the page walk
-    CHECK(lk_debug_write((const char *)0x10000000, 4) == ERR_FAULT);
-    put("RAWTEST: bad pointers refused\n");
+    CHECK_EQ(lk_debug_write((const char *)0x10000000, 4), ERR_FAULT);
+    test_put("RAWTEST: bad pointers refused\n");
 }
 
 static void test_unserved(void) {
     // a row with no handler, the first number past the table, and one far past it
-    CHECK(lk_handle_close(1) == ERR_NOT_SUPPORTED);
-    CHECK(raw_syscall(21) == ERR_NOT_SUPPORTED);
-    CHECK(raw_syscall(~0ul) == ERR_NOT_SUPPORTED);
-    put("RAWTEST: unserved syscalls ok\n");
+    CHECK_EQ(lk_recv(LK_HANDLE_INVALID, NULL), ERR_NOT_SUPPORTED);
+    CHECK_EQ(raw_syscall(21), ERR_NOT_SUPPORTED);
+    CHECK_EQ(raw_syscall(~0ul), ERR_NOT_SUPPORTED);
+    test_put("RAWTEST: unserved syscalls ok\n");
 }
 
 void _start_c(const struct lk_proc_args *args) __attribute__((noreturn));
 void _start_c(const struct lk_proc_args *args) {
-    put("RAWTEST: start\n");
+    test_put("RAWTEST: start\n");
 
     test_startup_block(args);
     test_debug_write();
     test_unserved();
 
-    if (failures) {
-        put("RAWTEST: FAIL (");
-        put_dec((unsigned)failures);
-        put(" checks)\n");
-        lk_exit(1);
-    }
-    put("RAWTEST: PASS\n");
+    test_check_failures();
+    test_put("RAWTEST: PASS\n");
     lk_exit(0);
 }

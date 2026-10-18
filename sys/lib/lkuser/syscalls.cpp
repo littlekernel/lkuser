@@ -33,8 +33,10 @@
 #include "proc.h"
 #include "thread.h"
 
-// after <lk/err.h>: a user-space status code that differs from LK's is a macro redefinition
-#include <sys/lk_err.h>
+// user space's status codes are LK's
+#define LK_ERR_DEF(name, value) static_assert(name == (value), #name " differs from LK's");
+#include <sys/_errors.h>
+#undef LK_ERR_DEF
 
 namespace lkuser {
 
@@ -73,16 +75,9 @@ status_t sys_debug_write(user_ptr<const char> buf, size_t len) {
 }
 
 // Rows this executive does not serve.
-status_t sys_handle_close(lk_handle_t) { return ERR_NOT_SUPPORTED; }
-status_t sys_handle_dup(lk_handle_t, uint32_t, user_ptr<lk_handle_t>) { return ERR_NOT_SUPPORTED; }
-status_t sys_call(lk_handle_t, user_ptr<lk_call_args>) { return ERR_NOT_SUPPORTED; }
 status_t sys_recv(lk_handle_t, user_ptr<lk_recv_args>) { return ERR_NOT_SUPPORTED; }
-status_t sys_msg_read(lk_token_t, size_t, user_ptr<const lk_iov>, size_t) { return ERR_NOT_SUPPORTED; }
-status_t sys_msg_write(lk_token_t, size_t, user_ptr<const lk_iov>, size_t) { return ERR_NOT_SUPPORTED; }
 status_t sys_reply(lk_token_t, user_ptr<const lk_reply_args>) { return ERR_NOT_SUPPORTED; }
 status_t sys_impulse_send(lk_handle_t, user_ptr<const lk_impulse>) { return ERR_NOT_SUPPORTED; }
-status_t sys_endpoint_create(user_ptr<const lk_endpoint_args>, user_ptr<lk_handle_t>) { return ERR_NOT_SUPPORTED; }
-status_t sys_connect(lk_handle_t, user_ptr<lk_handle_t>) { return ERR_NOT_SUPPORTED; }
 status_t sys_connection_accept(lk_token_t, uintptr_t, user_ptr<lk_handle_t>) { return ERR_NOT_SUPPORTED; }
 status_t sys_connection_refuse(lk_token_t) { return ERR_NOT_SUPPORTED; }
 status_t sys_connection_set_cookie(lk_handle_t, uintptr_t) { return ERR_NOT_SUPPORTED; }
@@ -166,5 +161,25 @@ extern "C" void riscv_syscall_handler(struct riscv_short_iframe *frame) {
 
     t->set_in_syscall(false);
     arch_disable_ints();
+}
+
+// Any other trap from user mode ends the process with ERR_FAULT. Every process has one thread,
+// so ending this one is all it takes.
+extern "C" void riscv_user_exception(long cause, ulong epc, struct riscv_short_iframe *frame) {
+    lkuser::thread *t = lkuser::thread::current();
+    if (!t) {
+        riscv_user_exception_unhandled(cause, epc, frame);
+    }
+
+    // before interrupts are enabled, as another trap may overwrite it
+    const ulong tval = riscv_csr_read(RISCV_CSR_XTVAL);
+    lkuser::proc *p = t->process();
+    printf("lkuser: process %u (%s) faulted: cause %ld, epc %#lx, tval %#lx\n", p->pid(),
+           p->name(), cause, epc, tval);
+
+    // exit takes mutexes, as the syscall path does
+    arch_enable_ints();
+    p->exit(ERR_FAULT);
+    thread_exit(ERR_FAULT);
 }
 #endif

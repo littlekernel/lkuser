@@ -30,6 +30,13 @@ _APP_OBJS := $(_APP_COBJS) $(_APP_CPPOBJS) $(_APP_ASMOBJS) $(_APP_ARM_COBJS) $(_
 # make sure libc is built (and headers are generated) before compiling anything
 $(_APP_OBJS): $(LIBC)
 
+# the recipes run after this file has cleared the APP_* variables, so each object keeps its
+# app's values
+$(_APP_OBJS): APP_OPTFLAGS := $(APP_OPTFLAGS)
+$(_APP_OBJS): APP_COMPILEFLAGS := $(APP_COMPILEFLAGS)
+$(_APP_OBJS): APP_CFLAGS := $(APP_CFLAGS)
+$(_APP_OBJS): APP_INCLUDES := $(APP_INCLUDES)
+
 $(_APP_COBJS): $(BUILDDIR)/%.o: %.c
 	@$(MKDIR)
 	@echo compiling $<

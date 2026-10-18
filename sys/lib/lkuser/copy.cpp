@@ -17,7 +17,7 @@ namespace lkuser {
 
 namespace {
 
-enum class direction { FROM_USER, TO_USER };
+enum class direction { FROM_USER, TO_USER, ZERO };
 
 status_t copy_user(vmm_aspace_t *aspace, vaddr_t uaddr, uint8_t *kbuf, size_t len, direction dir) {
     DEBUG_ASSERT(!(aspace->flags & VMM_ASPACE_FLAG_KERNEL));
@@ -26,8 +26,12 @@ status_t copy_user(vmm_aspace_t *aspace, vaddr_t uaddr, uint8_t *kbuf, size_t le
         return ERR_FAULT;
     }
 
-    const uint need = ARCH_MMU_FLAG_PERM_USER |
-                      (dir == direction::TO_USER ? ARCH_MMU_FLAG_PERM_WRITE : ARCH_MMU_FLAG_PERM_READ);
+    uint need = ARCH_MMU_FLAG_PERM_USER;
+    if (dir == direction::TO_USER) {
+        need |= ARCH_MMU_FLAG_PERM_WRITE;
+    } else if (dir == direction::FROM_USER) {
+        need |= ARCH_MMU_FLAG_PERM_READ;
+    }
     while (len > 0) {
         // stay within one page: the next one may map anywhere, or nowhere
         const size_t chunk = MIN(len, PAGE_SIZE - (uaddr & (PAGE_SIZE - 1)));
@@ -44,8 +48,10 @@ status_t copy_user(vmm_aspace_t *aspace, vaddr_t uaddr, uint8_t *kbuf, size_t le
         if (kva) {
             if (dir == direction::TO_USER) {
                 memcpy(kva, kbuf, chunk);
-            } else {
+            } else if (dir == direction::FROM_USER) {
                 memcpy(kbuf, kva, chunk);
+            } else {
+                memset(kva, 0, chunk);
             }
         }
         vmm_aspace_unlock(aspace);
@@ -54,7 +60,9 @@ status_t copy_user(vmm_aspace_t *aspace, vaddr_t uaddr, uint8_t *kbuf, size_t le
             return ERR_FAULT;
         }
         uaddr += chunk;
-        kbuf += chunk;
+        if (kbuf) {
+            kbuf += chunk;
+        }
         len -= chunk;
     }
     return NO_ERROR;
@@ -78,6 +86,10 @@ status_t copy_to_user(vmm_aspace_t *aspace, vaddr_t dst, const void *src, size_t
     // copy_user only reads kbuf in this direction
     return copy_user(aspace, dst, static_cast<uint8_t *>(const_cast<void *>(src)), len,
                      direction::TO_USER);
+}
+
+status_t zero_user_pages(vmm_aspace_t *aspace, vaddr_t addr, size_t len) {
+    return copy_user(aspace, addr, nullptr, len, direction::ZERO);
 }
 
 } // namespace lkuser

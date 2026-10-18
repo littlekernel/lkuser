@@ -11,11 +11,17 @@
 // only <stdint.h>/<stddef.h> types, never LK's.
 //
 // Width rule: a structure that crosses a process boundary or is read by a service (the
-// startup block, and later message headers, impulses and service payloads) uses fixed-width
-// integers only, with static_asserts on its size and every field offset, so a 32-bit and a
-// 64-bit build agree on it. Syscall argument structures never leave the calling process and
-// use size_t and pointers freely. Every syscall argument fits one register on both widths:
-// a 64-bit value travels in a structure, never as an argument.
+// startup block, message headers, impulses and service payloads) uses fixed-width integers
+// only, with static_asserts on its size and every field offset, so a 32-bit and a 64-bit
+// build agree on it. Syscall argument structures never leave the calling process and use
+// size_t and pointers freely.
+//
+// Argument widths: a syscall argument is register width by preference: handles, rights and
+// counts are 32-bit, lengths and offsets size_t, tokens and cookies uintptr_t. An inherently
+// 64-bit value (a file offset, a time) may take a register pair on 32-bit as the psABI
+// prescribes, but neither the stubs nor the dispatcher map a pair yet (the dispatcher asserts
+// that each argument fits one register), so the first such row has to add that mapping. No
+// row has one: times travel in the argument structures.
 
 #include <stddef.h>
 #include <stdint.h>
@@ -29,22 +35,32 @@
 // LK's status codes: NO_ERROR or a negative ERR_* (<sys/lk_err.h>), never an errno
 typedef int lk_status_t;
 
-// an index into the calling process's handle table
+// names a slot in the calling process's handle table; 0 is never a handle
 typedef uint32_t lk_handle_t;
 #define LK_HANDLE_INVALID ((lk_handle_t)0)
+
+// What a handle lets its holder do with the object. Rights only ever shrink: the calls that
+// create an object hand out the full set for its kind, handle_dup can drop rights, and
+// carrying a handle in a message keeps them.
+#define LK_RIGHT_DUP      (1u << 0)  // handle_dup
+#define LK_RIGHT_TRANSFER (1u << 1)  // carried in a message to another process
+#define LK_RIGHT_WAIT     (1u << 2)  // wait on the object's signals
+#define LK_RIGHT_CALL     (1u << 3)  // call over a connection
+#define LK_RIGHT_IMPULSE  (1u << 4)  // impulse_send over a connection
+#define LK_RIGHT_SIGNAL   (1u << 5)  // connection_signal and connection_set_cookie (peer view)
+#define LK_RIGHT_RECV     (1u << 6)  // recv on an endpoint or group
+#define LK_RIGHT_CONNECT  (1u << 7)  // connect to an endpoint
+#define LK_RIGHT_MAP      (1u << 8)  // map a memory object
+#define LK_RIGHT_READ     (1u << 9)  // the protections a memory object's mappings may have
+#define LK_RIGHT_WRITE    (1u << 10)
+#define LK_RIGHT_EXEC     (1u << 11)
+#define LK_RIGHT_INFO     (1u << 12) // process.INFO on a process
+#define LK_RIGHT_KILL     (1u << 13) // process.KILL on a process
+#define LK_RIGHTS_ALL     ((1u << 14) - 1)
 
 // Authority over one received call, valid in the receiving process only, so it never
 // crosses a process boundary and is register width.
 typedef uintptr_t lk_token_t;
-
-// syscall argument structures, defined with the rows that use them
-struct lk_iov;
-struct lk_call_args;
-struct lk_recv_args;
-struct lk_reply_args;
-struct lk_impulse;
-struct lk_endpoint_args;
-struct lk_wait_args;
 
 // Startup block: what a process is born with, at the top of its main thread's stack, sp
 // pointing at it on entry. The header is followed by uint32_t arg_off[nargs], then
@@ -67,12 +83,17 @@ LK_ABI_ASSERT(sizeof(struct lk_proc_handle) == 8);
 LK_ABI_ASSERT(offsetof(struct lk_proc_handle, tag) == 0);
 LK_ABI_ASSERT(offsetof(struct lk_proc_handle, handle) == 4);
 
-// startup handle tags
+// Startup handle tags: connections to the services of the same name. Which a process gets
+// is its build's and its spawner's decision.
 #define LK_TAG_PROCESS   1u
 #define LK_TAG_VM        2u
 #define LK_TAG_TIME      3u
 #define LK_TAG_CONSOLE   4u
 #define LK_TAG_NAMESPACE 5u
+
+// tags from here up name test services, present only in builds that compile them in
+#define LK_TAG_TEST_BASE 0x1000u
+#define LK_TAG_TEST_ECHO (LK_TAG_TEST_BASE + 0)
 
 static inline const uint32_t *lk_proc_args_offsets(const struct lk_proc_args *a) {
     return (const uint32_t *)(a + 1);
@@ -84,4 +105,15 @@ static inline const struct lk_proc_handle *lk_proc_args_handles(const struct lk_
 
 static inline const char *lk_proc_args_arg(const struct lk_proc_args *a, uint32_t i) {
     return (const char *)a + lk_proc_args_offsets(a)[i];
+}
+
+// the handle the process was born with for tag, or LK_HANDLE_INVALID
+static inline lk_handle_t lk_proc_args_find(const struct lk_proc_args *a, uint32_t tag) {
+    const struct lk_proc_handle *h = lk_proc_args_handles(a);
+    for (uint32_t i = 0; i < a->nhandles; i++) {
+        if (h[i].tag == tag) {
+            return h[i].handle;
+        }
+    }
+    return LK_HANDLE_INVALID;
 }

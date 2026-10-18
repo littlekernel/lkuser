@@ -30,23 +30,28 @@
 #include <lktl/ref_ptr.h>
 #include <stdint.h>
 
+#include "handle.h"
 #include "object.h"
 #include "thread.h"
 
 namespace lkuser {
 
-// A user process: an address space, the threads that run in it, and how it ended.
+// A user process: an address space, its handles, the threads that run in it, and how it
+// ended.
 class proc : public object, public lk::list_hook<> {
 public:
-    // A process with an empty address space and a startup block carrying argv (argv[0] is the
-    // image path). Nothing runs until start().
+    static constexpr obj_kind kKind = obj_kind::PROCESS;
+
+    // A process with an empty address space, a connection to every kernel service, and a
+    // startup block carrying argv (argv[0] is the image path) and those connections under
+    // their tags. Nothing runs until start().
     static status_t create(int argc, const char *const *argv, lk::ref_ptr<proc> *out);
 
     // Starts the main thread at entry, on a new stack whose top holds the startup block.
     status_t start(vaddr_t entry);
 
-    // Ends the process with code. The first call wins. Called by a thread of the process,
-    // which then leaves with thread_exit().
+    // Ends the process with code and closes its handles. The first call wins. Called by a
+    // thread of the process, which then leaves with thread_exit().
     void exit(int code);
 
     // A thread is leaving without ending the process. Returns true if it was the last one,
@@ -62,6 +67,7 @@ public:
     uint32_t pid() const { return pid_; }
     const char *name() const { return name_; }
     vmm_aspace_t *aspace() const { return aspace_; }
+    handle_table &handles() { return handles_; }
 
 private:
     friend class object;
@@ -70,7 +76,8 @@ private:
     ~proc();
     DISALLOW_COPY_ASSIGN_AND_MOVE(proc);
 
-    status_t build_args(int argc, const char *const *argv);
+    status_t build_args(int argc, const char *const *argv, const lk_proc_handle *handles,
+                        size_t nhandles);
     bool exited();
     void teardown();
     void free_aspace();
@@ -80,6 +87,9 @@ private:
     const uint32_t pid_;
     char name_[32] = {};
     vmm_aspace_t *aspace_ = nullptr;
+    // Emptied at exit rather than at destruction, so that a handle naming the process itself
+    // cannot keep it alive.
+    handle_table handles_;
 
     // the startup block until start() copies it out
     uint8_t *args_ = nullptr;

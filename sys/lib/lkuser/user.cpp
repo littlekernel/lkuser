@@ -34,6 +34,8 @@
 #include <string.h>
 #include <utility>
 
+#include "copy.h"
+#include "object.h"
 #include "proc.h"
 
 #ifndef FS_MAX_PATH_LEN
@@ -146,6 +148,14 @@ status_t elf_mem_alloc(struct elf_handle *handle, void **ptr, size_t len, uint n
     status_t err = vmm_alloc(p->aspace(), name, len, &vaptr, 0, VMM_FLAG_VALLOC_SPECIFIC,
                              ARCH_MMU_FLAG_PERM_USER | ARCH_MMU_FLAG_PERM_RWX_MASK);
     LTRACEF("vmm_alloc returns %d, ptr %p\n", err, vaptr);
+    if (err < 0) {
+        return err;
+    }
+    // elf_load fills only the segment, not the rest of its first and last pages
+    err = zero_user_pages(p->aspace(), (vaddr_t)vaptr, len);
+    if (err < 0) {
+        return err;
+    }
 
     *ptr = (void *)((uintptr_t)vaptr + aligndiff);
     LTRACEF("returning ptr %p\n", *ptr);
@@ -215,6 +225,8 @@ usage:
         printf("%s load <path to binary> [args...]\n", argv[0].str);
         printf("%s run [&]\n", argv[0].str);
         printf("%s root <path>\n", argv[0].str);
+        printf("%s objs [-f]          every object (-f: take no locks)\n", argv[0].str);
+        printf("%s handles <pid> [-f] a process's handles\n", argv[0].str);
         return -1;
     }
 
@@ -277,6 +289,34 @@ usage:
         }
         if (wait) {
             p->wait();
+        }
+    } else if (!strcmp(argv[1].str, "objs")) {
+        const bool lock = !(argc > 2 && !strcmp(argv[2].str, "-f"));
+        lkuser::object::for_each([](lkuser::object &o) { o.dump(); }, lock);
+    } else if (!strcmp(argv[1].str, "handles")) {
+        if (argc < 3) {
+            goto notenoughargs;
+        }
+        const uint32_t pid = argv[2].u;
+        const bool lock = !(argc > 3 && !strcmp(argv[3].str, "-f"));
+        bool found = false;
+        // with the registry locked the process cannot be destroyed while its table is read
+        lkuser::object::for_each(
+            [pid, lock, &found](lkuser::object &o) {
+                if (o.kind() != lkuser::obj_kind::PROCESS) {
+                    return;
+                }
+                auto &p = static_cast<lkuser::proc &>(o);
+                if (p.pid() == pid) {
+                    printf("handles of process %u (%s):\n", p.pid(), p.name());
+                    p.handles().dump(lock);
+                    found = true;
+                }
+            },
+            lock);
+        if (!found) {
+            printf("no process %u\n", pid);
+            return ERR_NOT_FOUND;
         }
     } else {
         printf("unrecognized subcommand\n");

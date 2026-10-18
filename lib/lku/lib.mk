@@ -11,6 +11,7 @@ LIB := $(LIB_BUILDDIR)/$(LIB_NAME).a
 
 LIB_CFLAGS :=
 LIB_SRCS := $(LOCAL_DIR)/crt0_$(ARCH).S
+LIB_SRCS += $(LOCAL_DIR)/msg.c
 LIB_SRCS += $(LOCAL_DIR)/newlib.c
 LIB_SRCS += $(LOCAL_DIR)/syscalls.c
 

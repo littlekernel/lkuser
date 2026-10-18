@@ -23,13 +23,13 @@
 
 // The raw syscall table, one row per syscall: LK_SYSCALL_DEF(number, return type, name,
 // arguments...). Included with LK_SYSCALL_DEF defined by the user-space stubs (lib/lku) and by
-// the kernel's dispatcher (syscalls.cpp), after <sys/lk_abi.h>; both sides expand the same
+// the kernel's dispatcher (syscalls.cpp), after <sys/lk_msg.h>; both sides expand the same
 // rows, so numbers and signatures cannot skew.
 //
 // Trap ABI (riscv): number in a7, arguments in a0-a5, the result in a0, LK's NO_ERROR or a
-// negative ERR_*. Every argument fits one register on 32 and 64 bit; 64-bit values travel in
-// the argument structures. A row without a kernel handler returns ERR_NOT_SUPPORTED, as does
-// a number past the end of the table.
+// negative ERR_*. Arguments follow the argument-width rule of <sys/lk_abi.h>: each fits one
+// register today, and times travel in the argument structures. A row without a kernel handler
+// returns ERR_NOT_SUPPORTED, as does a number past the end of the table.
 
 LK_SYSCALL_DEF(0,  void,        exit,                  int code)
 LK_SYSCALL_DEF(1,  void,        thread_exit,           void)

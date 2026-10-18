@@ -23,6 +23,14 @@ _LIB_OBJS := $(_LIB_COBJS) $(_LIB_CPPOBJS) $(_LIB_ASMOBJS) $(_LIB_ARM_COBJS) $(_
 # make sure libc is built (and headers are generated) before compiling anything
 $(_LIB_OBJS): $(LIBC)
 
+# the recipes run after this file has cleared the LIB_* variables, so each object keeps its
+# lib's values
+$(_LIB_OBJS): LIB_OPTFLAGS := $(LIB_OPTFLAGS)
+$(_LIB_OBJS): LIB_COMPILEFLAGS := $(LIB_COMPILEFLAGS)
+$(_LIB_OBJS): LIB_CFLAGS := $(LIB_CFLAGS)
+$(_LIB_OBJS): LIB_ASMFLAGS := $(LIB_ASMFLAGS)
+$(_LIB_OBJS): LIB_INCLUDES := $(LIB_INCLUDES)
+
 $(_LIB_COBJS): $(BUILDDIR)/%.o: %.c
 	@$(MKDIR)
 	@echo compiling $<

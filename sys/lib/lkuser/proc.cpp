@@ -35,6 +35,8 @@
 #include <sys/lk_abi.h>
 
 #include "copy.h"
+#include "endpoint.h"
+#include "svc/svc.h"
 
 namespace lkuser {
 
@@ -54,7 +56,7 @@ uint32_t next_pid = 1;
 
 } // namespace
 
-proc::proc(uint32_t pid) : object(obj_kind::PROCESS), pid_(pid) {
+proc::proc(uint32_t pid) : object(kKind), pid_(pid) {
     event_init(&exit_event_, false, 0);
 }
 
@@ -71,7 +73,7 @@ status_t proc::create(int argc, const char *const *argv, lk::ref_ptr<proc> *out)
     }
 
     lk::ref_ptr<proc> p =
-        lk::adopt_ref(new (std::nothrow) proc(__atomic_fetch_add(&next_pid, 1, __ATOMIC_RELAXED)));
+        object::make<proc>(__atomic_fetch_add(&next_pid, 1, __ATOMIC_RELAXED));
     if (!p) {
         return ERR_NO_MEMORY;
     }
@@ -80,7 +82,18 @@ status_t proc::create(int argc, const char *const *argv, lk::ref_ptr<proc> *out)
     const char *slash = strrchr(argv[0], '/');
     strlcpy(p->name_, slash ? slash + 1 : argv[0], sizeof(p->name_));
 
-    status_t err = p->build_args(argc, argv);
+    size_t nservices;
+    const service *svcs = services(&nservices);
+    lk_proc_handle handles[kMaxServices];
+    for (size_t i = 0; i < nservices; i++) {
+        handles[i].tag = svcs[i].tag;
+        status_t err = connect(p.get(), svcs[i].ep, &handles[i].handle);
+        if (err < 0) {
+            return err;
+        }
+    }
+
+    status_t err = p->build_args(argc, argv, handles, nservices);
     if (err < 0) {
         return err;
     }
@@ -95,9 +108,11 @@ status_t proc::create(int argc, const char *const *argv, lk::ref_ptr<proc> *out)
     return NO_ERROR;
 }
 
-// The startup block: header, argument offsets, no handles, then the strings.
-status_t proc::build_args(int argc, const char *const *argv) {
-    const size_t header = sizeof(lk_proc_args) + argc * sizeof(uint32_t);
+// The startup block: header, argument offsets, handles, then the strings.
+status_t proc::build_args(int argc, const char *const *argv, const lk_proc_handle *handles,
+                          size_t nhandles) {
+    const size_t header =
+        sizeof(lk_proc_args) + argc * sizeof(uint32_t) + nhandles * sizeof(lk_proc_handle);
     size_t len = header;
     for (int i = 0; i < argc; i++) {
         len += strlen(argv[i]) + 1;
@@ -113,8 +128,9 @@ status_t proc::build_args(int argc, const char *const *argv) {
 
     auto *a = reinterpret_cast<lk_proc_args *>(buf);
     a->nargs = argc;
-    a->nhandles = 0;
+    a->nhandles = nhandles;
     auto *offsets = reinterpret_cast<uint32_t *>(a + 1);
+    memcpy(offsets + argc, handles, nhandles * sizeof(lk_proc_handle));
     size_t pos = header;
     for (int i = 0; i < argc; i++) {
         const size_t n = strlen(argv[i]) + 1;
@@ -145,6 +161,10 @@ status_t proc::start(vaddr_t entry) {
     }
     auto free_stack =
         lk::make_auto_call([this, stack]() { vmm_free_region(aspace_, (vaddr_t)stack); });
+    err = zero_user_pages(aspace_, (vaddr_t)stack, kMainStackSize);
+    if (err < 0) {
+        return err;
+    }
 
     // sp points at the startup block, 16-byte aligned as the calling convention asks
     const vaddr_t sp = ROUNDDOWN((vaddr_t)stack + kMainStackSize - args_len_, 16);
@@ -190,6 +210,7 @@ void proc::exit(int code) {
         exit_code_ = code;
     }
 
+    handles_.close_all();
     printf("lkuser: process %u (%s) exited with code %d\n", pid_, name_, code);
     event_signal(&exit_event_, true);
     event_signal(&reap_event, true);

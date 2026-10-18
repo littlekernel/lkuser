@@ -38,6 +38,11 @@ bool user_range_valid(const vmm_aspace_t *aspace, vaddr_t addr, size_t len);
 status_t copy_from_user(vmm_aspace_t *aspace, void *dst, vaddr_t src, size_t len);
 status_t copy_to_user(vmm_aspace_t *aspace, vaddr_t dst, const void *src, size_t len);
 
+// Zeroes [addr, addr + len) of a mapping the kernel has just made in aspace, whatever its
+// protection, through the physmap: the pmm hands out pages as their last user left them.
+// ERR_FAULT for a page that is not mapped for user access. Locks as the copies do.
+status_t zero_user_pages(vmm_aspace_t *aspace, vaddr_t addr, size_t len);
+
 template <typename T>
 status_t copy_from_user(vmm_aspace_t *aspace, void *dst, user_ptr<T> src, size_t len) {
     return copy_from_user(aspace, dst, src.addr(), len);

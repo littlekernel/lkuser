@@ -166,7 +166,7 @@ endif
 
 # apps run in order by test-auto, each as name[:arg...]; each must print <NAME>: PASS
 # (upper-cased) and exit with code 0
-TEST_APPS ?= rawtest:a:b:c
+TEST_APPS ?= rawtest:a:b:c calltest
 TEST_TIMEOUT ?= 60
 TEST_SMP ?= 1
 

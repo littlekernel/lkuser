@@ -27,6 +27,7 @@
 #include <lktl/list.h>
 #include <lktl/ref_ptr.h>
 
+#include "msg.h"
 #include "object.h"
 
 namespace lkuser {
@@ -38,6 +39,8 @@ class proc;
 // thread before dropping the last reference.
 class thread : public object, public lk::list_hook<> {
 public:
+    static constexpr obj_kind kKind = obj_kind::THREAD;
+
     // A suspended thread that will enter user space at entry with sp. Once created it must
     // be resumed: LK cannot free a thread that never ran.
     static status_t create(proc *p, vaddr_t entry, vaddr_t sp, lk::ref_ptr<thread> *out);
@@ -46,6 +49,10 @@ public:
     static thread *current() { return reinterpret_cast<thread *>(tls_get(TLS_ENTRY_LKUSER)); }
 
     proc *process() const { return proc_.get(); }
+    uint32_t tid() const { return tid_; }
+
+    // the call this thread has in progress; only the thread itself touches it
+    pending_call &call() { return call_; }
 
     void resume() { thread_resume(&lkthread_); }
     void join() { thread_join(&lkthread_, nullptr, INFINITE_TIME); }
@@ -64,9 +71,11 @@ private:
     static int start_routine(void *arg);
 
     lk::ref_ptr<proc> proc_;
+    const uint32_t tid_;
     const vaddr_t entry_;
     const vaddr_t sp_;
     bool in_syscall_ = false;
+    pending_call call_;
 
     thread_t lkthread_ = {};
 };

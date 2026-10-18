@@ -24,14 +24,20 @@
 
 #include <arch.h>
 #include <lk/err.h>
-#include <new>
 
 #include "proc.h"
 
 namespace lkuser {
 
+namespace {
+
+uint32_t next_tid = 1;
+
+} // namespace
+
 thread::thread(proc *p, vaddr_t entry, vaddr_t sp)
-    : object(obj_kind::THREAD), proc_(p), entry_(entry), sp_(sp) {}
+    : object(kKind), proc_(p), tid_(__atomic_fetch_add(&next_tid, 1, __ATOMIC_RELAXED)),
+      entry_(entry), sp_(sp) {}
 
 thread::~thread() = default;
 
@@ -45,7 +51,7 @@ int thread::start_routine(void *arg) {
 }
 
 status_t thread::create(proc *p, vaddr_t entry, vaddr_t sp, lk::ref_ptr<thread> *out) {
-    lk::ref_ptr<thread> t = lk::adopt_ref(new (std::nothrow) thread(p, entry, sp));
+    lk::ref_ptr<thread> t = object::make<thread>(p, entry, sp);
     if (!t) {
         return ERR_NO_MEMORY;
     }

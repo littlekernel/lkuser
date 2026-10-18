@@ -7,7 +7,7 @@
  */
 #pragma once
 
-#include <sys/lk_abi.h>
+#include <sys/lk_msg.h>
 
 #include "copy.h"
 
