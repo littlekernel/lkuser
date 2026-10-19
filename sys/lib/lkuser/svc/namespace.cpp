@@ -29,7 +29,7 @@ constexpr uint32_t kOpenFlags = LK_NS_OPEN_READ | LK_NS_OPEN_WRITE | LK_NS_OPEN_
 
 // The paths user servers own, in the namespace's own terms (no "lkuser root" in front). A
 // mount holds its endpoint without counting as a handle, so it is dead once the endpoint has
-// closed, and is dropped when next seen.
+// closed, and is dropped by the next MOUNT or LOOKUP.
 constexpr size_t kMaxMounts = 8;
 struct mount {
     char path[FS_MAX_PATH_LEN];
@@ -255,31 +255,28 @@ lk_status_t ns_mount(kcall &c) {
         return ERR_NOT_SUPPORTED;
     }
 
-    lk::ref_ptr<endpoint> dead;
-    {
-        AutoLock guard(mounts_lock);
-        mount *slot = nullptr;
-        for (mount &m : mounts) {
-            if (m.ep && strcmp(m.path, path) == 0) {
-                if (!m.ep->closed()) {
-                    return ERR_ALREADY_MOUNTED;
-                }
-                slot = &m;
-                break;
-            }
-            if (!m.ep && !slot) {
-                slot = &m;
-            }
+    // dead mounts' endpoint references go when this returns, outside the lock
+    lk::ref_ptr<endpoint> dead[kMaxMounts];
+    AutoLock guard(mounts_lock);
+    mount *slot = nullptr;
+    for (size_t i = 0; i < kMaxMounts; i++) {
+        mount &m = mounts[i];
+        if (m.ep && m.ep->closed()) {
+            dead[i] = std::move(m.ep);
         }
-        if (!slot) {
-            return ERR_NO_RESOURCES;
+        if (m.ep && strcmp(m.path, path) == 0) {
+            return ERR_ALREADY_MOUNTED;
         }
-        dead = std::move(slot->ep);
-        strlcpy(slot->path, path, sizeof(slot->path));
-        slot->len = strlen(path);
-        slot->ep = std::move(ep);
+        if (!m.ep && !slot) {
+            slot = &m;
+        }
     }
-    // a dead mount's endpoint reference goes here, outside the lock
+    if (!slot) {
+        return ERR_NO_RESOURCES;
+    }
+    strlcpy(slot->path, path, sizeof(slot->path));
+    slot->len = strlen(path);
+    slot->ep = std::move(ep);
     return NO_ERROR;
 }
 

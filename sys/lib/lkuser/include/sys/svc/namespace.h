@@ -33,7 +33,8 @@
 // connections to that endpoint. reply: no payload. The namespace keeps the endpoint without
 // holding a handle to it, so the mount goes once the server's own handles are gone: mount a
 // spare CONNECT handle (a dup), not the only one. ERR_ALREADY_MOUNTED while another live mount
-// has the path, ERR_NO_RESOURCES when the table is full, ERR_INVALID_ARGS for "/",
+// has the path, ERR_NO_RESOURCES while 8 live mounts fill the table (a mount whose endpoint
+// has closed makes room), ERR_INVALID_ARGS for "/",
 // ERR_NOT_SUPPORTED for a CONNECT_NOTIFY endpoint.
 #define LK_NS_MOUNT   6u
 // The mount at exactly the path goes; the request lends a handle to its endpoint (any rights),

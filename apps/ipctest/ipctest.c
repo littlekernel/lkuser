@@ -29,6 +29,8 @@
 #define HDR sizeof(struct lk_msg_hdr)
 // the impulses a process can have queued at once (LKUSER_IMPULSE_POOL)
 #define IMPULSE_POOL 32
+// the namespace's mount table (kMaxMounts)
+#define MOUNTS 8
 
 static lk_handle_t console_h, process_h, vm_h, time_h, ns_h;
 static uint32_t my_pid;
@@ -896,6 +898,23 @@ static void test_namespace(void) {
     ep = endpoint(0, 1, 0);
     spare = without(ep, connect_only);
     CHECK_EQ(lk_ns_mount(ns_h, "/srv/ipctest", spare), NO_ERROR);
+    CHECK_EQ(lk_ns_unmount(ns_h, "/srv/ipctest", ep), NO_ERROR);
+
+    // the table holds MOUNTS live mounts, and a dead one makes room wherever it is
+    char path[] = "/srv/ipctest0";
+    lk_handle_t eps[MOUNTS];
+    for (int i = 0; i < MOUNTS; i++) {
+        eps[i] = endpoint(0, 1, 0);
+        path[sizeof(path) - 2] = (char)('0' + i);
+        CHECK_EQ(lk_ns_mount(ns_h, path, without(eps[i], connect_only)), NO_ERROR);
+    }
+    spare = without(ep, connect_only);
+    CHECK_EQ(lk_ns_mount(ns_h, "/srv/ipctest", spare), ERR_NO_RESOURCES);
+    for (int i = 0; i < MOUNTS; i++) {
+        CHECK_EQ(lk_handle_close(eps[i]), NO_ERROR);
+    }
+    CHECK_EQ(lk_ns_mount(ns_h, "/srv/ipctest", spare), NO_ERROR);
+    CHECK_EQ(lk_ns_lookup(ns_h, "/srv/ipctest0", &conn, rest, sizeof(rest), NULL), ERR_NOT_FOUND);
     CHECK_EQ(lk_ns_unmount(ns_h, "/srv/ipctest", ep), NO_ERROR);
 
     CHECK_EQ(lk_handle_close(ep), NO_ERROR);
