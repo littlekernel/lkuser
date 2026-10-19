@@ -90,7 +90,7 @@ void endpoint::close() {
     }
 }
 
-connection::connection(lk::ref_ptr<endpoint> ep, uint64_t cookie)
+connection::connection(lk::ref_ptr<endpoint> ep, uintptr_t cookie)
     : object(kKind), ep_(std::move(ep)), cookie_(cookie) {
     if (ep_->is_kernel()) {
         return;

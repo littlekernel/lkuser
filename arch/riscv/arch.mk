@@ -1,5 +1,6 @@
 # arch stuff
 TOOLCHAIN_PREFIX ?= riscv64-elf-
+ARCH_FAMILY := riscv
 #ARCH_LINKER_SCRIPT := arch/riscv/linker.ld
 #ARCH_LINKER_SCRIPT := arch/riscv/elf64lriscv.xe
 

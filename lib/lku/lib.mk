@@ -10,7 +10,7 @@ LIB := $(LIB_BUILDDIR)/$(LIB_NAME).a
 #$(warning LIB = $(LIB))
 
 LIB_CFLAGS :=
-LIB_SRCS := $(LOCAL_DIR)/crt0_$(ARCH).S
+LIB_SRCS := $(LOCAL_DIR)/crt0_$(ARCH_FAMILY).S
 LIB_SRCS += $(LOCAL_DIR)/dirent.c
 LIB_SRCS += $(LOCAL_DIR)/fd.c
 LIB_SRCS += $(LOCAL_DIR)/msg.c

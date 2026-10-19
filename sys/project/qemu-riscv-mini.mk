@@ -11,4 +11,6 @@ LKUSER_SERVICES := console process
 LKUSER_HANDLES := 16
 LKUSER_BOOT := /bin/minitest:$(LKUSER_HANDLES)
 
-include project/qemu-virt-riscv64-supervisor-test.mk
+# the LK project underneath: riscv64 here, riscv32 when a qemu-riscv32 project includes this one
+LKUSER_LK_PROJECT ?= project/qemu-virt-riscv64-supervisor-test.mk
+include $(LKUSER_LK_PROJECT)

@@ -528,7 +528,7 @@ static void test_vm(void) {
     // more than the machine has, and more than any address space holds: refused, and the
     // kernel carries on
     CHECK_EQ(lk_vm_alloc(vm_h, (size_t)1 << 30, LK_VM_PROT_READ, &q), ERR_NO_MEMORY);
-    CHECK_EQ(lk_vm_alloc(vm_h, (size_t)1 << 62, LK_VM_PROT_READ, &q), ERR_NO_MEMORY);
+    CHECK_EQ(lk_vm_alloc(vm_h, SIZE_MAX & ~(size_t)(PAGE - 1), LK_VM_PROT_READ, &q), ERR_NO_MEMORY);
     q = NULL;
     CHECK_EQ(lk_vm_alloc(vm_h, PAGE, LK_VM_PROT_READ, &q), NO_ERROR);
     CHECK_EQ(lk_vm_unmap(vm_h, q), NO_ERROR);

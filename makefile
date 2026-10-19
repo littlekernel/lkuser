@@ -85,6 +85,11 @@ $(warning LIBS = $(LIBS))
 
 _all: lk apps libs
 
+# ARCH names lkuser's arch (riscv32), not LK's (riscv, which LK's project sets itself), so a
+# command line ARCH stays out of LK's make
+LK_MAKEOVERRIDES := $(filter-out ARCH=%,$(MAKEOVERRIDES))
+lk clean spotless: MAKEOVERRIDES = $(LK_MAKEOVERRIDES)
+
 lk:
 	PROJECT=$(LK_TESTPROJECT) $(MAKE) -f makefile.lk
 
@@ -170,6 +175,8 @@ ifeq ($(ARCH),arm)
 	qemu-system-arm -m 512 -smp 1 -machine virt -cpu cortex-a15 -kernel build-$(LK_TESTPROJECT)/lk.elf -nographic -drive if=none,file=$(BUILDDIR)/root.fat,id=blk,format=raw -device virtio-blk-device,drive=blk
 else ifeq ($(ARCH),riscv)
 	qemu-system-riscv64 -m 512 -smp 1 -machine virt -cpu rv64 -bios default -kernel build-$(LK_TESTPROJECT)/lk.elf -nographic -drive if=none,file=$(BUILDDIR)/root.fat,id=blk,format=raw -device virtio-blk-device,drive=blk
+else ifeq ($(ARCH),riscv32)
+	qemu-system-riscv32 -m 512 -smp 1 -machine virt -cpu rv32 -bios default -kernel build-$(LK_TESTPROJECT)/lk.elf -nographic -drive if=none,file=$(BUILDDIR)/root.fat,id=blk,format=raw -device virtio-blk-device,drive=blk
 endif
 
 # apps run in order by test-auto, each as name[:arg...][&][=code]; each must exit with code

@@ -119,11 +119,12 @@ public:
     static constexpr obj_kind kKind = obj_kind::CONNECTION;
 
     endpoint *ep() const { return ep_.get(); }
+    // zero-extended to the 64 bits of the wire fields it is reported in
     uint64_t cookie() const { return __atomic_load_n(&cookie_, __ATOMIC_RELAXED); }
     uint32_t client_handles_debug() const { return __atomic_load_n(&client_handles_, __ATOMIC_RELAXED); }
 
     // under LKUSER_IPC_LOCK
-    void set_cookie_locked(uint64_t cookie) { __atomic_store_n(&cookie_, cookie, __ATOMIC_RELAXED); }
+    void set_cookie_locked(uintptr_t cookie) { __atomic_store_n(&cookie_, cookie, __ATOMIC_RELAXED); }
     bool client_closed_locked() const { return client_closed_; }
 
     // a client view came or went (object::handle_added/handle_removed)
@@ -136,13 +137,15 @@ public:
 private:
     friend class object;
 
-    explicit connection(lk::ref_ptr<endpoint> ep, uint64_t cookie = 0);
+    explicit connection(lk::ref_ptr<endpoint> ep, uintptr_t cookie = 0);
     // runs a kernel endpoint's release hook
     ~connection();
     DISALLOW_COPY_ASSIGN_AND_MOVE(connection);
 
     const lk::ref_ptr<endpoint> ep_;
-    uint64_t cookie_;
+    // register width, like every value it is set from (a row's cookie argument, a kernel
+    // pointer), so it reads and writes atomically on a 32-bit build too
+    uintptr_t cookie_;
     uint32_t client_handles_ = 0;
     // under LKUSER_IPC_LOCK
     bool client_closed_ = false;

@@ -1,5 +1,6 @@
 # arch stuff
 TOOLCHAIN_PREFIX ?= arm-eabi-
+ARCH_FAMILY := arm
 #ARCH_LINKER_SCRIPT := arch/arm/linker.ld
 #ARCH_LINKER_SCRIPT := arch/arm/armelf.xe
 
