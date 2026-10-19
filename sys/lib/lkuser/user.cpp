@@ -36,8 +36,10 @@
 #include <utility>
 
 #include "copy.h"
+#include "endpoint.h"
 #include "object.h"
 #include "proc.h"
+#include "svc/svc.h"
 #include "user.h"
 
 #define LOCAL_TRACE 0
@@ -283,6 +285,31 @@ struct {
     vaddr_t entry;
 } loaded;
 
+// What the build is: its services and where each is served, the boot processes, the sizes of a
+// process's tables, and the raw syscall table.
+void print_profile() {
+    size_t n;
+    const lkuser::service *svcs = lkuser::services(&n);
+    printf("services (%zu of %zu):\n", n, lkuser::kMaxServices);
+    for (size_t i = 0; i < n; i++) {
+        const lkuser::endpoint *ep = svcs[i].ep.get();
+        printf("  %-10s ", svcs[i].name);
+        if (svcs[i].tag == lkuser::kNoTag) {
+            printf("no tag  ");
+        } else {
+            printf("tag %-4u", svcs[i].tag);
+        }
+        printf(" %s\n", ep->is_kernel() ? "kernel" : ep->closed() ? "user endpoint, closed" : "user endpoint");
+    }
+    printf("boot: '%s' from %s on %s\n", LKUSER_BOOT, LKUSER_BOOT_FS, LKUSER_BOOT_DEV);
+    printf("per process: %d handles, %d inflight calls, %d impulses\n", LKUSER_HANDLES,
+           LKUSER_INFLIGHT, LKUSER_IMPULSE_POOL);
+    printf("syscalls:\n");
+#define LK_SYSCALL_DEF(num, ret, name, args...) printf("  %2d %s %s(%s)\n", num, #ret, #name, #args);
+#include <sys/_syscalls.h>
+#undef LK_SYSCALL_DEF
+}
+
 int cmd_lkuser(int argc, const console_cmd_args *argv) {
     if (argc < 2) {
 notenoughargs:
@@ -294,6 +321,7 @@ usage:
         printf("%s wait               until every process started with start, and every boot process, has exited\n", argv[0].str);
         printf("%s root <path>\n", argv[0].str);
         printf("%s objs [-f]          every object (-f: take no locks)\n", argv[0].str);
+        printf("%s profile            the services, boot processes, table sizes and syscalls\n", argv[0].str);
         printf("%s handles <pid> [-f] a process's handles\n", argv[0].str);
         return -1;
     }
@@ -369,6 +397,8 @@ usage:
         }
     } else if (!strcmp(argv[1].str, "wait")) {
         lkuser::wait_background();
+    } else if (!strcmp(argv[1].str, "profile")) {
+        print_profile();
     } else if (!strcmp(argv[1].str, "objs")) {
         const bool lock = !(argc > 2 && !strcmp(argv[2].str, "-f"));
         lkuser::object::for_each([](lkuser::object &o) { o.dump(); }, lock);
