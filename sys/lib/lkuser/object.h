@@ -7,12 +7,20 @@
  */
 #pragma once
 
+#include <kernel/thread.h>
+#include <kernel/wait.h>
 #include <lktl/function_ref.h>
 #include <lktl/list.h>
 #include <lktl/ref_ptr.h>
 #include <new>
 #include <stdint.h>
 #include <utility>
+
+// The lock of every queue the IPC touches: object signals and their waiters now, endpoint
+// queues later. It is LK's thread lock, since wait_queue_* need that held; behind a macro so
+// finer locking can replace it. Interrupts are off while it is held: pointer work only.
+#define LKUSER_IPC_LOCK(state) THREAD_LOCK(state)
+#define LKUSER_IPC_UNLOCK(state) THREAD_UNLOCK(state)
 
 namespace lkuser {
 
@@ -30,6 +38,13 @@ const char *kind_name(obj_kind kind);
 
 // the hook of the registry list every object is on
 struct registry_tag {};
+
+// A thread waiting on an object's signals: linked on the object while the thread blocks on
+// its own wait queue, so one thread can wait on several objects at once.
+struct wait_edge : lk::list_hook<> {
+    wait_queue_t *wq;
+    uint32_t mask; // the signals that end the wait
+};
 
 // Base of every kernel object: a reference count, a kind and the number of handles naming it.
 // No virtual functions: the last release calls destroy(), which deletes the concrete type by
@@ -62,6 +77,14 @@ public:
     void handle_removed();
     uint32_t handle_count_debug() const { return __atomic_load_n(&handle_count_, __ATOMIC_RELAXED); }
 
+    // Signals (LK_SIGNAL_*): raising one wakes every waiter whose mask it is in.
+    void signal(uint32_t set);
+    // under LKUSER_IPC_LOCK
+    uint32_t signals_locked() const { return signals_; }
+    void add_waiter_locked(wait_edge *e) { waiters_.push_back(e); }
+    void remove_waiter_locked(wait_edge *e) { waiters_.remove(e); }
+    uint32_t signals_debug() const { return __atomic_load_n(&signals_, __ATOMIC_RELAXED); }
+
     // Calls fn on every object, holding the registry mutex unless lock is false (for the
     // console's -f forms). With the mutex held no object can be destroyed meanwhile; fn must
     // not make or release one.
@@ -80,6 +103,10 @@ private:
 
     const obj_kind kind_;
     uint32_t handle_count_ = 0;
+
+    // under LKUSER_IPC_LOCK
+    uint32_t signals_ = 0;
+    lk::list<wait_edge> waiters_;
 };
 
 } // namespace lkuser

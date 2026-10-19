@@ -84,16 +84,61 @@ void drop_reply_handles(proc *p, pending_call &pc) {
     pc.nreply_handles = 0;
 }
 
+// The handles a request carries, looked up in p's table: ERR_FAULT for an unreadable array,
+// ERR_BAD_HANDLE for no such handle, ERR_ACCESS_DENIED for a moved one without TRANSFER, and
+// ERR_INVALID_ARGS for a handle moved and named again in the same request.
+status_t carry_request_handles(proc *p, const lk_call_args &args, carried_handle *out) {
+    lk_handle_t hs[LK_MSG_MAX_HANDLES];
+    status_t err = copy_from_user(p->aspace(), hs, reinterpret_cast<vaddr_t>(args.handles),
+                                  args.nhandles * sizeof(lk_handle_t));
+    if (err < 0) {
+        return err;
+    }
+    for (size_t i = 0; i < args.nhandles; i++) {
+        const bool lent = args.handle_flags & LK_HANDLE_LEND(i);
+        for (size_t j = 0; j < i; j++) {
+            if (hs[j] == hs[i] && !(lent && out[j].lent)) {
+                return ERR_INVALID_ARGS;
+            }
+        }
+        out[i].h = hs[i];
+        out[i].lent = lent;
+        err = p->handles().get(hs[i], lent ? 0 : LK_RIGHT_TRANSFER, &out[i].obj, &out[i].rights);
+        if (err < 0) {
+            return err;
+        }
+        if (lent) {
+            out[i].rights &= ~(LK_RIGHT_DUP | LK_RIGHT_TRANSFER);
+        }
+    }
+    return NO_ERROR;
+}
+
 } // namespace
 
 // Runs the handler of a kernel endpoint on the calling thread, then writes the reply header
 // at offset 0. The request has been checked and its prefix copied. A refusal carries no
-// handles, so a client that ignores a failed reply leaks none.
-status_t call_kernel(thread *t, const connection &conn, pending_call &pc, const lk_msg_hdr &hdr) {
+// handles, so a client that ignores a failed reply leaks none, and moves none: the moved
+// handles leave the caller only when the service accepted the call, even if writing the reply
+// then fails. A killed thread's call (ERR_INTERRUPTED) gets no reply at all; the thread ends
+// on its way out.
+status_t call_kernel(thread *t, const connection &conn, pending_call &pc, const lk_msg_hdr &hdr,
+                     const carried_handle *handles, size_t nhandles) {
     pc.reply_len = 0;
     pc.nreply_handles = 0;
-    kcall c(t, conn, pc, hdr);
+    kcall c(t, conn, pc, hdr, handles, nhandles);
     const lk_status_t status = conn.ep()->handler()(c);
+    if (status == ERR_INTERRUPTED) {
+        drop_reply_handles(t->process(), pc);
+        return ERR_INTERRUPTED;
+    }
+    if (status >= 0) {
+        for (size_t i = 0; i < nhandles; i++) {
+            if (!handles[i].lent) {
+                t->process()->handles().close_if(handles[i].h, handles[i].obj.get());
+            }
+        }
+    }
     if (c.faulted_ || status < 0) {
         drop_reply_handles(t->process(), pc);
     }
@@ -143,11 +188,8 @@ status_t sys_call(lk_handle_t conn_h, user_ptr<lk_call_args> uargs) {
     if (!ep->is_kernel()) {
         return ERR_NOT_SUPPORTED;
     }
-    // carrying handles in a request: not yet
-    if (args.nhandles > 0) {
-        return ERR_NOT_SUPPORTED;
-    }
-    if (args.reply_nhandles > LK_MSG_MAX_HANDLES) {
+    if (args.nhandles > LK_MSG_MAX_HANDLES || args.reply_nhandles > LK_MSG_MAX_HANDLES ||
+        (args.handle_flags & ~((1u << args.nhandles) - 1))) {
         return ERR_INVALID_ARGS;
     }
 
@@ -177,6 +219,11 @@ status_t sys_call(lk_handle_t conn_h, user_ptr<lk_call_args> uargs) {
         hdr.nhandles != args.nhandles) {
         return ERR_INVALID_ARGS;
     }
+    carried_handle carried[LK_MSG_MAX_HANDLES];
+    err = carry_request_handles(p, args, carried);
+    if (err < 0) {
+        return err;
+    }
 
     // Where the results go must be writable before the service runs, so a call that could
     // not report them has no effects: reply_len, and the reply handles, cleared to
@@ -195,7 +242,7 @@ status_t sys_call(lk_handle_t conn_h, user_ptr<lk_call_args> uargs) {
     }
     pc.reply_handles_cap = args.reply_nhandles;
 
-    err = call_kernel(t, *conn, pc, hdr);
+    err = call_kernel(t, *conn, pc, hdr, carried, args.nhandles);
     if (err < 0) {
         return err;
     }

@@ -6,9 +6,9 @@
  * https://opensource.org/licenses/MIT
  */
 
-// Faults on purpose, for checking by hand that a user fault ends its process and nothing
-// else: "make test-auto TEST_APPS=faulttest" shows the kernel's "faulted" line and exit code
-// -40 (ERR_FAULT). The gate reports FAIL for it, as it cannot yet expect a non-zero exit code.
+// Faults on purpose, so that a user fault is seen to end its process and nothing else: the
+// kernel prints its "faulted" line and the process exits with -40 (ERR_FAULT), which the gate
+// expects of it ("faulttest=-40" in TEST_APPS).
 
 #define TEST_NAME "FAULTTEST"
 #include <lktest.h>

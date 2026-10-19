@@ -7,8 +7,16 @@
  */
 // The console service: the kernel console behind the console protocol.
 
+#include <kernel/wait.h>
+#include <lib/cbuf.h>
+#include <lib/io.h>
 #include <stdio.h>
 #include <sys/svc/console.h>
+
+// READ takes characters from the console's input buffer, where a kill can interrupt the wait
+#if !CONSOLE_HAS_INPUT_BUFFER
+#error "the console service needs CONSOLE_HAS_INPUT_BUFFER"
+#endif
 
 #include "svc.h"
 
@@ -29,10 +37,20 @@ lk_status_t console_write(kcall &c) {
     return NO_ERROR;
 }
 
+// The next character typed: ERR_INTERRUPTED if a kill ends the wait.
+int read_char() {
+    char ch;
+    ssize_t n = cbuf_read_etc(&console_input_cbuf, &ch, 1, true, WAIT_QUEUE_INTERRUPTIBLE);
+    if (n < 0) {
+        return static_cast<int>(n);
+    }
+    return static_cast<unsigned char>(ch);
+}
+
 // A line as a terminal in canonical mode gives it: echoed as typed, Backspace and DEL erase,
 // Return or newline ends it as '\n', ^D ends it as it stands (on an empty line, end of input).
 // LK's console hands over raw characters, so this is the line discipline. A line longer than
-// the room comes back in pieces.
+// the room comes back in pieces. The wait for a character is a kill point.
 lk_status_t console_read(kcall &c) {
     lk_console_read_req req;
     lk_status_t err = c.args(&req);
@@ -44,7 +62,10 @@ lk_status_t console_read(kcall &c) {
     const size_t max = MIN(MIN(size_t{req.max}, c.reply_capacity()), sizeof(line));
     size_t len = 0;
     while (len < max) {
-        const int ch = getchar();
+        const int ch = read_char();
+        if (ch == ERR_INTERRUPTED) {
+            return ERR_INTERRUPTED;
+        }
         if (ch < 0 || ch == 0x04) {
             break;
         }
@@ -77,6 +98,10 @@ lk_status_t console_winsize(kcall &c) {
 }
 
 lk_status_t console_handler(kcall &c) {
+    // no op takes a handle
+    if (c.nhandles() != 0) {
+        return ERR_INVALID_ARGS;
+    }
     switch (c.op()) {
         case LK_CONSOLE_WRITE:
             return console_write(c);

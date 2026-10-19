@@ -27,6 +27,14 @@
 // request: struct lk_file_readdir_req; reply: struct lk_file_dirent, then the name.
 // ERR_NOT_FOUND past the last entry. Needs a directory opened with LK_NS_OPEN_DIR.
 #define LK_FILE_READDIR  5u
+// request: struct lk_file_io_req and a memory object with LK_RIGHT_WRITE (lent, or moved);
+// reply: struct lk_file_io_reply. The file's bytes from off go into the object at mem_off,
+// fewer at the end of the file. Needs LK_NS_OPEN_READ.
+#define LK_FILE_READ_INTO  6u
+// request: struct lk_file_io_req and a memory object with LK_RIGHT_READ; reply: struct
+// lk_file_io_reply. The object's bytes from mem_off go into the file at off, or at its end
+// with LK_FILE_WRITE_APPEND. Needs LK_NS_OPEN_WRITE.
+#define LK_FILE_WRITE_FROM 7u
 
 #define LK_FILE_TYPE_FILE 1u
 #define LK_FILE_TYPE_DIR  2u
@@ -98,3 +106,25 @@ struct lk_file_dirent {
 LK_ABI_ASSERT(sizeof(struct lk_file_dirent) == 8);
 LK_ABI_ASSERT(offsetof(struct lk_file_dirent, name_len) == 0);
 LK_ABI_ASSERT(offsetof(struct lk_file_dirent, reserved) == 4);
+
+struct lk_file_io_req {
+    uint64_t off;     // in the file
+    uint64_t mem_off; // in the memory object
+    uint32_t len;     // bytes at most; mem_off + len inside the object
+    uint32_t flags;   // WRITE_FROM: LK_FILE_WRITE_*; READ_INTO: 0
+};
+LK_ABI_ASSERT(sizeof(struct lk_file_io_req) == 24);
+LK_ABI_ASSERT(offsetof(struct lk_file_io_req, off) == 0);
+LK_ABI_ASSERT(offsetof(struct lk_file_io_req, mem_off) == 8);
+LK_ABI_ASSERT(offsetof(struct lk_file_io_req, len) == 16);
+LK_ABI_ASSERT(offsetof(struct lk_file_io_req, flags) == 20);
+
+struct lk_file_io_reply {
+    uint64_t end;   // the file offset just past the last byte moved
+    uint32_t count; // bytes moved
+    uint32_t reserved;
+};
+LK_ABI_ASSERT(sizeof(struct lk_file_io_reply) == 16);
+LK_ABI_ASSERT(offsetof(struct lk_file_io_reply, end) == 0);
+LK_ABI_ASSERT(offsetof(struct lk_file_io_reply, count) == 8);
+LK_ABI_ASSERT(offsetof(struct lk_file_io_reply, reserved) == 12);

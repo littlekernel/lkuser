@@ -35,6 +35,9 @@ struct lk_msg {
     size_t nreq;
     const struct lk_iov *reply; // where the reply payload goes, likewise
     size_t nreply;
+    const lk_handle_t *carry;   // handles the request carries, at most LK_MSG_MAX_HANDLES:
+    size_t ncarry;              // moved, or lent where carry_flags has LK_HANDLE_LEND(i)
+    uint32_t carry_flags;
     lk_handle_t *handles;       // room for the handles a reply carries
     size_t handles_max;
     size_t reply_len;           // out: the reply payload's length
@@ -49,6 +52,11 @@ lk_status_t lk_msg_callv(lk_handle_t conn, struct lk_msg *m);
 // arrived, *reply_len (if not NULL) gets its payload length.
 lk_status_t lk_msg_call(lk_handle_t conn, uint32_t op, const void *req, size_t req_len,
                         void *reply, size_t reply_cap, size_t *reply_len);
+
+// wait() on one object: NO_ERROR once a signal in mask is up, ERR_TIMED_OUT if none rose
+// within timeout_ns (LK_TIME_INFINITE for no limit); *signals, if not NULL, gets what the
+// object showed.
+lk_status_t lk_wait_one(lk_handle_t h, uint32_t mask, uint64_t timeout_ns, uint32_t *signals);
 
 #ifdef __cplusplus
 }

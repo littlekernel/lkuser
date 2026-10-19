@@ -101,6 +101,17 @@ private:
 // A connection to ep installed in p's table with the default rights.
 status_t connect(proc *p, lk::ref_ptr<endpoint> ep, lk_handle_t *out);
 
+// A handle a request carries, as the service sees it. A moved handle (the default) stays in
+// the caller's table while the service runs and leaves it once the service returns success; a
+// lent one never leaves, and the service sees its rights without DUP and TRANSFER. A service
+// keeps a carried object only by reference or by putting it in a table, never a lent one.
+struct carried_handle {
+    lk_handle_t h; // in the caller's table
+    lk::ref_ptr<object> obj;
+    uint32_t rights;
+    bool lent;
+};
+
 // A call to a kernel endpoint as its handler sees it. The request header has been read and
 // checked before the handler runs, and the reply header is written after it returns, with the
 // handler's status and as many payload bytes as it wrote. Offsets count from the end of the
@@ -117,6 +128,32 @@ public:
     proc *caller() const;
     thread *caller_thread() const { return thread_; }
     const connection &conn() const { return *conn_; }
+
+    // the handles the request carries
+    size_t nhandles() const { return nhandles_; }
+    const carried_handle &handle(size_t i) const { return handles_[i]; }
+
+    // Handle i as a T with every right in need: ERR_INVALID_ARGS past the last handle, then
+    // ERR_ACCESS_DENIED for a missing right, then ERR_BAD_HANDLE for another kind of object.
+    template <typename T>
+    lk_status_t handle_as(size_t i, uint32_t need, lk::ref_ptr<T> *out) const {
+        if (i >= nhandles_) {
+            return ERR_INVALID_ARGS;
+        }
+        const carried_handle &ch = handles_[i];
+        if ((ch.rights & need) != need) {
+            return ERR_ACCESS_DENIED;
+        }
+        if (ch.obj->kind() != T::kKind) {
+            return ERR_BAD_HANDLE;
+        }
+        *out = lk::static_ref_cast<T>(ch.obj);
+        return NO_ERROR;
+    }
+
+    // ERR_INVALID_ARGS unless the request carries exactly n handles, for the ops that take
+    // none or a fixed number, so that nothing is moved to a service that ignores it.
+    lk_status_t expect_handles(size_t n) const { return nhandles_ == n ? NO_ERROR : ERR_INVALID_ARGS; }
 
     // The request's payload as a T: ERR_INVALID_ARGS unless it is exactly that long.
     template <typename T>
@@ -154,10 +191,12 @@ public:
 
 private:
     friend status_t call_kernel(thread *t, const connection &conn, pending_call &pc,
-                                const lk_msg_hdr &hdr);
+                                const lk_msg_hdr &hdr, const carried_handle *handles,
+                                size_t nhandles);
 
-    kcall(thread *t, const connection &conn, pending_call &pc, const lk_msg_hdr &hdr)
-        : thread_(t), conn_(&conn), pc_(pc), hdr_(hdr) {}
+    kcall(thread *t, const connection &conn, pending_call &pc, const lk_msg_hdr &hdr,
+          const carried_handle *handles, size_t nhandles)
+        : thread_(t), conn_(&conn), pc_(pc), hdr_(hdr), handles_(handles), nhandles_(nhandles) {}
     DISALLOW_COPY_ASSIGN_AND_MOVE(kcall);
 
     ssize_t fault_check(ssize_t r) {
@@ -171,6 +210,8 @@ private:
     const connection *const conn_;
     pending_call &pc_;
     const lk_msg_hdr hdr_;
+    const carried_handle *const handles_;
+    const size_t nhandles_;
     bool faulted_ = false;
 };
 

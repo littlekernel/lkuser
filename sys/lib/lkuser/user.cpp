@@ -113,6 +113,30 @@ status_t resolve_fs_path(const char* path, char* out_path, size_t out_path_len) 
     return NO_ERROR;
 }
 
+status_t resolve_user_path(const char *path, size_t len, char *out) {
+    if (len == 0) {
+        return ERR_BAD_PATH;
+    }
+    if (len >= FS_MAX_PATH_LEN) {
+        return ERR_TOO_BIG;
+    }
+    if (path[0] != '/' || memchr(path, '\0', len)) {
+        return ERR_BAD_PATH;
+    }
+
+    // the path goes in at [1], leaving room to put back a leading '/'
+    char buf[FS_MAX_PATH_LEN + 1];
+    memcpy(buf + 1, path, len);
+    buf[1 + len] = '\0';
+    char *p = buf + 1;
+    fs_normalize_path(p);
+    // normalizing leaves "/" empty, and a path that climbed above the root relative
+    if (*p != '/') {
+        *--p = '/';
+    }
+    return resolve_fs_path(p, out, FS_MAX_PATH_LEN);
+}
+
 namespace {
 
 ssize_t elf_read_hook_file(struct elf_handle *handle, void *buf, uint64_t offset, size_t len) {
@@ -164,16 +188,11 @@ status_t elf_mem_alloc(struct elf_handle *handle, void **ptr, size_t len, uint n
     return err;
 }
 
-// Loads the ELF image at path into p's address space and returns its entry point.
-status_t load_image(proc *p, const char *path, vaddr_t *entry) {
-    char resolved_path[FS_MAX_PATH_LEN];
-    status_t err = resolve_fs_path(path, resolved_path, sizeof(resolved_path));
-    if (err < 0) {
-        return err;
-    }
+} // namespace
 
+status_t load_image(proc *p, const char *path, vaddr_t *entry) {
     filehandle *fhandle;
-    err = fs_open_file(resolved_path, &fhandle);
+    status_t err = fs_open_file(path, &fhandle);
     if (err < 0) {
         return err;
     }
@@ -188,10 +207,13 @@ status_t load_image(proc *p, const char *path, vaddr_t *entry) {
     elf.mem_alloc_hook = &elf_mem_alloc;
     elf.mem_alloc_hook_arg = p;
 
-    // elf_load writes the segments through their user mappings, so it runs on p's aspace
+    // elf_load writes the segments through their user mappings, so it runs on p's aspace;
+    // the caller's, a user thread's own or none, is put back
     vmm_aspace_t *prev = vmm_set_active_aspace(p->aspace());
     err = elf_load(&elf);
     vmm_set_active_aspace(prev);
+    close_elf.cancel();
+    elf_close_handle(&elf);
     if (err < 0) {
         return err;
     }
@@ -202,8 +224,6 @@ status_t load_image(proc *p, const char *path, vaddr_t *entry) {
     *entry = elf.entry;
     return NO_ERROR;
 }
-
-} // namespace
 
 } // namespace lkuser
 
@@ -245,13 +265,17 @@ usage:
         }
 
         lk::ref_ptr<lkuser::proc> p;
-        status_t err = lkuser::proc::create(nargs, args, &p);
+        status_t err = lkuser::proc::create(nargs, args, true, nullptr, 0, &p);
         if (err < 0) {
             printf("lkuser: creating a process for %s failed: %d\n", args[0], err);
             return err;
         }
+        char path[FS_MAX_PATH_LEN];
+        err = lkuser::resolve_fs_path(args[0], path, sizeof(path));
         vaddr_t entry;
-        err = lkuser::load_image(p.get(), args[0], &entry);
+        if (err == NO_ERROR) {
+            err = lkuser::load_image(p.get(), path, &entry);
+        }
         if (err < 0) {
             printf("lkuser: loading %s failed: %d\n", args[0], err);
             return err;

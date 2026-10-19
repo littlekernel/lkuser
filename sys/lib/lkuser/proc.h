@@ -36,32 +36,57 @@
 
 namespace lkuser {
 
+class memobj;
+
+// A handle a new process is born with: obj with rights, under tag in its startup block.
+struct startup_handle {
+    uint32_t tag;
+    lk::ref_ptr<object> obj;
+    uint32_t rights;
+};
+
 // A user process: an address space, its handles, the threads that run in it, and how it
 // ended.
 class proc : public object, public lk::list_hook<> {
 public:
     static constexpr obj_kind kKind = obj_kind::PROCESS;
 
-    // A process with an empty address space, a connection to every kernel service, and a
-    // startup block carrying argv (argv[0] is the image path) and those connections under
-    // their tags. Nothing runs until start().
-    static status_t create(int argc, const char *const *argv, lk::ref_ptr<proc> *out);
+    // A process with an empty address space and a startup block carrying argv (argv[0] is the
+    // image path) and its startup handles: a connection to every kernel service with a tag if
+    // services is set, then extra, an extra handle replacing a service's under the same tag.
+    // Nothing runs until start().
+    static status_t create(int argc, const char *const *argv, bool services,
+                           const startup_handle *extra, size_t nextra, lk::ref_ptr<proc> *out);
 
     // Starts the main thread at entry, on a new stack whose top holds the startup block.
     status_t start(vaddr_t entry);
 
-    // Ends the process with code and closes its handles. The first call wins. Called by a
-    // thread of the process, which then leaves with thread_exit().
+    // Makes t's LK thread and runs it: ERR_BAD_STATE once the process has exited.
+    status_t start_thread(thread *t);
+
+    // Ends the process with code: closes its handles and kills every thread, the caller's
+    // too if it is one of them, so each leaves at its next way out of the kernel or
+    // interruptible wait. The first call wins. Callable from any thread.
     void exit(int code);
 
-    // A thread is leaving without ending the process. Returns true if it was the last one,
-    // in which case the caller ends the process.
+    // A thread is leaving. Returns true if it was the last one, in which case the caller ends
+    // the process.
     bool thread_exiting();
 
     // Blocks until the process has exited and returns its exit code.
     int wait();
 
-    // Frees the threads and address spaces of exited processes. Run by the reaper thread.
+    // Whether the process has exited, and if so with what.
+    bool exited(int *code);
+
+    // Maps len bytes of m from off into the address space with arch_mmu_flags; the mapping
+    // holds a reference to m until unmap() or the process's end.
+    status_t map(lk::ref_ptr<memobj> m, size_t off, size_t len, uint arch_mmu_flags, vaddr_t *va);
+    // Removes the region holding va, a memory object's mapping or not.
+    status_t unmap(vaddr_t va);
+
+    // Frees the threads and address spaces of exited processes, then raises their
+    // LK_SIGNAL_TERMINATED. Run by the reaper thread.
     static void reap_exited();
 
     uint32_t pid() const { return pid_; }
@@ -72,15 +97,18 @@ public:
 private:
     friend class object;
 
+    struct mapping;
+
     explicit proc(uint32_t pid);
     ~proc();
     DISALLOW_COPY_ASSIGN_AND_MOVE(proc);
 
     status_t build_args(int argc, const char *const *argv, const lk_proc_handle *handles,
                         size_t nhandles);
-    bool exited();
+    bool is_dead();
     void teardown();
     void free_aspace();
+    void drop_mappings();
 
     enum class state { CREATED, RUNNING, DEAD };
 
@@ -102,6 +130,10 @@ private:
     lk::list<thread> threads_;
     uint32_t live_threads_ = 0;
     int exit_code_ = 0;
+
+    // memory objects mapped into the address space, each holding a reference
+    Mutex mappings_lock_;
+    lk::list<mapping> mappings_;
 
     event_t exit_event_;
 };

@@ -39,32 +39,17 @@ lk_status_t request_path(kcall &c, uint32_t *flags, char *out) {
     if (c.len() - sizeof(req) != req.path_len) {
         return ERR_INVALID_ARGS;
     }
-    if (req.path_len == 0) {
-        return ERR_BAD_PATH;
-    }
     if (req.path_len >= FS_MAX_PATH_LEN) {
         return ERR_TOO_BIG;
     }
 
-    // the path goes in at [1], leaving room to put back a leading '/'
-    char path[FS_MAX_PATH_LEN + 1];
-    n = c.read(sizeof(req), path + 1, req.path_len);
+    char path[FS_MAX_PATH_LEN];
+    n = c.read(sizeof(req), path, req.path_len);
     if (n < 0) {
         return static_cast<lk_status_t>(n);
     }
-    if (path[1] != '/' || memchr(path + 1, '\0', req.path_len)) {
-        return ERR_BAD_PATH;
-    }
-    path[1 + req.path_len] = '\0';
-
-    char *p = path + 1;
-    fs_normalize_path(p);
-    // normalizing leaves "/" empty, and a path that climbed above the root relative
-    if (*p != '/') {
-        *--p = '/';
-    }
     *flags = req.flags;
-    return resolve_fs_path(p, out, FS_MAX_PATH_LEN);
+    return resolve_user_path(path, req.path_len, out);
 }
 
 lk_status_t open_file_at(const char *path, uint32_t flags, lk::ref_ptr<connection> *conn,
@@ -202,6 +187,10 @@ lk_status_t ns_path_op(kcall &c, status_t (*op)(const char *path)) {
 }
 
 lk_status_t ns_handler(kcall &c) {
+    // no op takes a handle
+    if (c.nhandles() != 0) {
+        return ERR_INVALID_ARGS;
+    }
     switch (c.op()) {
         case LK_NS_OPEN:
             return ns_open(c);

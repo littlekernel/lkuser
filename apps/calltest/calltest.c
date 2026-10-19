@@ -8,8 +8,8 @@
 
 // Native API test with no libc: calls the kernel services over the connections the process is
 // born with, and checks handles and their rights, endpoints, how the call path treats every
-// malformed call and bad buffer it can be given, handles carried by replies, and files and
-// directories through the namespace and file services. Progress lines and CALLTEST: PASS go
+// malformed call and bad buffer it can be given, handles carried by requests and replies, files
+// and directories through the namespace and file services, and memory objects. Progress lines and CALLTEST: PASS go
 // through the console service; each failed check prints a CALLTEST: FAIL line through
 // debug_write and the exit code is 1.
 
@@ -25,6 +25,7 @@
 // made and removed again by the file tests, in the image's root
 #define TMP_FILE "/calltest.tmp"
 #define TMP_DIR  "/calltest.dir"
+#define MEM_FILE "/calltest.mem"
 // no table has this many slots
 #define NOT_A_HANDLE 0xffffffffu
 
@@ -296,17 +297,12 @@ static void test_transport(void) {
     CHECK_EQ(call_iov(echo_h, req, 1, reply, 1, NULL), ERR_INVALID_ARGS);
     hdr.nhandles = 0;
 
-    // carrying handles in a request comes later; asking for more reply handles than a
-    // message can carry; room for reply handles that cannot be written
+    // asking for more reply handles than a message can carry; room for reply handles that
+    // cannot be written
     lk_handle_t rh[LK_MSG_MAX_HANDLES];
     struct lk_call_args args = {
         .req = req, .nreq = 1, .reply = reply, .nreply = 1, .timeout_ns = LK_TIME_INFINITE,
     };
-    args.handles = &console_h;
-    args.nhandles = 1;
-    CHECK_EQ(lk_call(echo_h, &args), ERR_NOT_SUPPORTED);
-    args.handles = NULL;
-    args.nhandles = 0;
     args.reply_nhandles = LK_MSG_MAX_HANDLES + 1;
     args.reply_handles = rh;
     CHECK_EQ(lk_call(echo_h, &args), ERR_INVALID_ARGS);
@@ -355,6 +351,66 @@ static void test_transport(void) {
     CHECK_EQ(lk_msg_write(1, 0, NULL, 0), ERR_NOT_FOUND);
 
     say("CALLTEST: transport checks ok\n");
+}
+
+// A call with no payload carrying n handles with flags (LK_HANDLE_LEND): the transport's status,
+// and the service's in *status.
+static lk_status_t call_carrying(lk_handle_t conn, uint32_t op, const lk_handle_t *hs, size_t n,
+                                 uint32_t flags, lk_status_t *status) {
+    struct lk_msg_hdr hdr = {.op = op, .nhandles = (uint32_t)n};
+    struct lk_msg_hdr rhdr = {.status = 1};
+    const struct lk_iov req = {&hdr, sizeof(hdr)};
+    const struct lk_iov reply = {&rhdr, sizeof(rhdr)};
+    struct lk_call_args args = {
+        .req = &req, .nreq = 1, .handles = hs, .nhandles = n, .reply = &reply, .nreply = 1,
+        .handle_flags = flags, .timeout_ns = LK_TIME_INFINITE,
+    };
+    lk_status_t err = lk_call(conn, &args);
+    *status = rhdr.status;
+    return err;
+}
+
+// Handles a request carries: the transport looks each up before the service runs, a moved one
+// needs TRANSFER, and a service that refuses the call moves nothing. The echo service takes no
+// handles, so it refuses every request that carries one.
+static void test_carried(void) {
+    lk_handle_t dup, weak;
+    lk_handle_t hs[LK_MSG_MAX_HANDLES + 1];
+    lk_status_t st;
+    CHECK_EQ(lk_handle_dup(console_h, LK_RIGHTS_ALL, &dup), NO_ERROR);
+    CHECK_EQ(lk_handle_dup(console_h, LK_RIGHTS_ALL & ~LK_RIGHT_TRANSFER, &weak), NO_ERROR);
+    for (int i = 0; i <= LK_MSG_MAX_HANDLES; i++) {
+        hs[i] = dup;
+    }
+
+    // too many, a flag past the last, an unreadable array, no such handle
+    CHECK_EQ(call_carrying(echo_h, LK_ECHO_ECHO, hs, LK_MSG_MAX_HANDLES + 1, ~0u, &st),
+             ERR_INVALID_ARGS);
+    CHECK_EQ(call_carrying(echo_h, LK_ECHO_ECHO, hs, 1, LK_HANDLE_LEND(0) | LK_HANDLE_LEND(1), &st),
+             ERR_INVALID_ARGS);
+    CHECK_EQ(call_carrying(echo_h, LK_ECHO_ECHO, (const lk_handle_t *)0x1000, 1, 0, &st), ERR_FAULT);
+    const lk_handle_t bogus = NOT_A_HANDLE;
+    CHECK_EQ(call_carrying(echo_h, LK_ECHO_ECHO, &bogus, 1, LK_HANDLE_LEND(0), &st), ERR_BAD_HANDLE);
+
+    // moving needs TRANSFER, lending nothing
+    CHECK_EQ(call_carrying(echo_h, LK_ECHO_ECHO, &weak, 1, 0, &st), ERR_ACCESS_DENIED);
+    CHECK_EQ(call_carrying(echo_h, LK_ECHO_ECHO, &weak, 1, LK_HANDLE_LEND(0), &st), NO_ERROR);
+    CHECK_EQ(st, ERR_INVALID_ARGS);
+
+    // one handle moved and named again in the same request; lent twice is no move
+    CHECK_EQ(call_carrying(echo_h, LK_ECHO_ECHO, hs, 2, 0, &st), ERR_INVALID_ARGS);
+    CHECK_EQ(call_carrying(echo_h, LK_ECHO_ECHO, hs, 2, LK_HANDLE_LEND(0), &st), ERR_INVALID_ARGS);
+    CHECK_EQ(call_carrying(echo_h, LK_ECHO_ECHO, hs, 2, LK_HANDLE_LEND(0) | LK_HANDLE_LEND(1), &st),
+             NO_ERROR);
+    CHECK_EQ(st, ERR_INVALID_ARGS);
+
+    // refused, so still here
+    CHECK_EQ(call_carrying(echo_h, LK_ECHO_ECHO, &dup, 1, 0, &st), NO_ERROR);
+    CHECK_EQ(st, ERR_INVALID_ARGS);
+    CHECK_EQ(lk_handle_close(dup), NO_ERROR);
+    CHECK_EQ(lk_handle_close(weak), NO_ERROR);
+
+    say("CALLTEST: carried handles ok\n");
 }
 
 static void test_echo(void) {
@@ -503,6 +559,9 @@ static void test_process(void) {
              ERR_INVALID_ARGS);
     CHECK_EQ(lk_msg_call(process_h, LK_PROCESS_INFO, NULL, 0, &info, 8, NULL),
              ERR_NOT_ENOUGH_BUFFER);
+    // about another process by a handle with INFO, which a connection lacks
+    CHECK_EQ(lk_process_info_of(process_h, console_h, &info), ERR_ACCESS_DENIED);
+    CHECK_EQ(lk_process_kill(process_h, console_h), ERR_ACCESS_DENIED);
 
     say("CALLTEST: process ok\n");
 }
@@ -777,6 +836,154 @@ static void test_paths(void) {
     say("CALLTEST: paths ok\n");
 }
 
+static lk_status_t map_status(lk_handle_t m, size_t off, size_t len, uint32_t prot) {
+    void *va;
+    lk_status_t err = lk_vm_memobj_map(vm_h, m, off, len, prot, &va);
+    if (err == NO_ERROR) {
+        CHECK_EQ(lk_vm_unmap(vm_h, va), NO_ERROR);
+    }
+    return err;
+}
+
+// MEMOBJ_MAP moving the handle rather than lending it
+static lk_status_t map_moved(lk_handle_t m, void **va) {
+    const struct lk_vm_memobj_map_req req = {.prot = LK_VM_PROT_READ};
+    struct lk_vm_alloc_reply reply = {0};
+    const struct lk_iov req_iov = {(void *)&req, sizeof(req)};
+    const struct lk_iov reply_iov = {&reply, sizeof(reply)};
+    struct lk_msg msg = {
+        .op = LK_VM_MEMOBJ_MAP, .req = &req_iov, .nreq = 1, .reply = &reply_iov, .nreply = 1,
+        .carry = &m, .ncarry = 1,
+    };
+    lk_status_t err = lk_msg_callv(vm_h, &msg);
+    *va = (void *)(uintptr_t)reply.va;
+    return err;
+}
+
+static void test_memobj(void) {
+    const uint32_t r = LK_VM_PROT_READ;
+    const uint32_t rw_prot = LK_VM_PROT_READ | LK_VM_PROT_WRITE;
+    lk_handle_t m, h, f;
+    size_t size, n;
+    uint64_t end;
+    uint8_t *rw, *ro;
+    void *va;
+
+    // made in whole pages, reading as zero; refused when empty, too large or with unknown flags
+    CHECK_EQ(lk_vm_memobj_create(vm_h, 3 * PAGE + 1, 0, &m, &size), NO_ERROR);
+    CHECK_EQ(size, 4 * PAGE);
+    CHECK_EQ(lk_vm_memobj_create(vm_h, 0, 0, &h, NULL), ERR_INVALID_ARGS);
+    CHECK_EQ(lk_vm_memobj_create(vm_h, PAGE, 0x80, &h, NULL), ERR_INVALID_ARGS);
+    CHECK_EQ(lk_vm_memobj_create(vm_h, LK_VM_MEMOBJ_MAX + 1, 0, &h, NULL), ERR_TOO_BIG);
+
+    // two mappings of the same pages, one of them read only and offset
+    CHECK_EQ(lk_vm_memobj_map(vm_h, m, 0, 0, rw_prot, (void **)&rw), NO_ERROR);
+    CHECK(all_bytes(rw, 4 * PAGE, 0));
+    CHECK_EQ(lk_vm_memobj_map(vm_h, m, PAGE, 2 * PAGE, r, (void **)&ro), NO_ERROR);
+    fill(rw, 4 * PAGE, 3);
+    CHECK(same(ro, rw + PAGE, 2 * PAGE));
+
+    // whole pages inside the object, READ always
+    CHECK_EQ(map_status(m, 1, PAGE, r), ERR_INVALID_ARGS);
+    CHECK_EQ(map_status(m, 0, PAGE + 1, r), ERR_INVALID_ARGS);
+    CHECK_EQ(map_status(m, 4 * PAGE, 0, r), ERR_INVALID_ARGS);
+    CHECK_EQ(map_status(m, 2 * PAGE, 3 * PAGE, r), ERR_INVALID_ARGS);
+    CHECK_EQ(map_status(m, 0, 0, LK_VM_PROT_WRITE), ERR_INVALID_ARGS);
+
+    // MAP, and the right of each protection; EXEC only on an object made with it
+    CHECK_EQ(map_status(m, 0, 0, r | LK_VM_PROT_EXEC), ERR_ACCESS_DENIED);
+    CHECK_EQ(lk_handle_dup(m, LK_RIGHTS_ALL & ~LK_RIGHT_WRITE, &h), NO_ERROR);
+    CHECK_EQ(map_status(h, 0, 0, rw_prot), ERR_ACCESS_DENIED);
+    CHECK_EQ(map_status(h, 0, 0, r), NO_ERROR);
+    CHECK_EQ(lk_handle_close(h), NO_ERROR);
+    CHECK_EQ(lk_handle_dup(m, LK_RIGHTS_ALL & ~LK_RIGHT_MAP, &h), NO_ERROR);
+    CHECK_EQ(map_status(h, 0, 0, r), ERR_ACCESS_DENIED);
+    CHECK_EQ(lk_handle_close(h), NO_ERROR);
+    CHECK_EQ(map_status(console_h, 0, 0, r), ERR_ACCESS_DENIED);
+    CHECK_EQ(lk_vm_memobj_create(vm_h, PAGE, LK_VM_MEMOBJ_EXEC, &h, NULL), NO_ERROR);
+    CHECK_EQ(map_status(h, 0, 0, r | LK_VM_PROT_EXEC), NO_ERROR);
+
+    // a handle moved to a service that accepts the call is gone; the mapping keeps the object
+    CHECK_EQ(map_moved(h, &va), NO_ERROR);
+    CHECK_EQ(lk_handle_close(h), ERR_BAD_HANDLE);
+    CHECK(all_bytes(va, PAGE, 0));
+    CHECK_EQ(lk_vm_unmap(vm_h, va), NO_ERROR);
+
+    // Call arguments the kernel can read but not write: reply_len is written before the
+    // service runs, so the call fails and the directory is never made.
+    lk_ns_rmdir(ns_h, TMP_DIR);
+    const struct lk_ns_path_req mkdir_req = {.path_len = sizeof(TMP_DIR) - 1};
+    struct lk_msg_hdr hdr = {.op = LK_NS_MKDIR, .len = sizeof(mkdir_req) + sizeof(TMP_DIR) - 1};
+    struct lk_msg_hdr rhdr;
+    const struct lk_iov req[3] = {
+        {&hdr, sizeof(hdr)},
+        {(void *)&mkdir_req, sizeof(mkdir_req)},
+        {(void *)TMP_DIR, sizeof(TMP_DIR) - 1},
+    };
+    const struct lk_iov reply = {&rhdr, sizeof(rhdr)};
+    const struct lk_call_args args = {
+        .req = req, .nreq = 3, .reply = &reply, .nreply = 1, .timeout_ns = LK_TIME_INFINITE,
+    };
+    // ro shows rw from its second page on
+    struct lk_call_args *args_rw = (struct lk_call_args *)(rw + PAGE);
+    *args_rw = args;
+    CHECK_EQ(lk_call(ns_h, (struct lk_call_args *)ro), ERR_FAULT);
+    struct lk_file_stat st;
+    CHECK_EQ(lk_ns_stat(ns_h, TMP_DIR, &st), ERR_NOT_FOUND);
+    // the same arguments where they can be written make it
+    CHECK_EQ(lk_call(ns_h, args_rw), NO_ERROR);
+    CHECK_EQ(rhdr.status, NO_ERROR);
+    CHECK_EQ(lk_ns_rmdir(ns_h, TMP_DIR), NO_ERROR);
+
+    // a file written from the object and read back into it
+    lk_ns_unlink(ns_h, MEM_FILE);
+    CHECK_EQ(lk_ns_open(ns_h, MEM_FILE,
+                        LK_NS_OPEN_CREATE | LK_NS_OPEN_READ | LK_NS_OPEN_WRITE, &f, NULL),
+             NO_ERROR);
+    fill(rw, 4 * PAGE, 9);
+    CHECK_EQ(lk_file_write_from(f, 0, 0, m, PAGE, 2 * PAGE, &n, &end), NO_ERROR);
+    CHECK_EQ(n, 2 * PAGE);
+    CHECK_EQ(end, 2 * PAGE);
+    CHECK_EQ(lk_file_write_from(f, 0, LK_FILE_WRITE_APPEND, m, 0, 100, &n, &end), NO_ERROR);
+    CHECK_EQ(end, 2 * PAGE + 100);
+    for (size_t i = 0; i < PAGE; i++) {
+        rw[3 * PAGE + i] = 0;
+    }
+    CHECK_EQ(lk_file_read_into(f, PAGE, m, 3 * PAGE, PAGE, &n), NO_ERROR);
+    CHECK_EQ(n, PAGE);
+    CHECK(same(rw + 3 * PAGE, rw + 2 * PAGE, PAGE));
+    // fewer at the end of the file
+    CHECK_EQ(lk_file_read_into(f, 2 * PAGE, m, 3 * PAGE, PAGE, &n), NO_ERROR);
+    CHECK_EQ(n, 100);
+    CHECK(same(rw + 3 * PAGE, rw, 100));
+    // inside the object only; READ_INTO writes it, WRITE_FROM reads it
+    CHECK_EQ(lk_file_read_into(f, 0, m, 3 * PAGE, PAGE + 1, &n), ERR_INVALID_ARGS);
+    CHECK_EQ(lk_file_read_into(f, 0, m, 5 * PAGE, 0, &n), ERR_INVALID_ARGS);
+    CHECK_EQ(lk_handle_dup(m, LK_RIGHTS_ALL & ~LK_RIGHT_WRITE, &h), NO_ERROR);
+    CHECK_EQ(lk_file_read_into(f, 0, h, 0, PAGE, &n), ERR_ACCESS_DENIED);
+    CHECK_EQ(lk_file_write_from(f, 0, 0, h, 0, PAGE, &n, NULL), NO_ERROR);
+    CHECK_EQ(lk_handle_close(h), NO_ERROR);
+    CHECK_EQ(lk_handle_dup(m, LK_RIGHTS_ALL & ~LK_RIGHT_READ, &h), NO_ERROR);
+    CHECK_EQ(lk_file_write_from(f, 0, 0, h, 0, PAGE, &n, NULL), ERR_ACCESS_DENIED);
+    CHECK_EQ(lk_handle_close(h), NO_ERROR);
+    CHECK_EQ(lk_file_read_into(f, 0, console_h, 0, PAGE, &n), ERR_ACCESS_DENIED);
+    CHECK_EQ(lk_handle_close(f), NO_ERROR);
+    CHECK_EQ(lk_ns_unlink(ns_h, MEM_FILE), NO_ERROR);
+    // the open mode holds as for READ and WRITE
+    CHECK_EQ(lk_ns_open(ns_h, "/bin/calltest", LK_NS_OPEN_READ, &f, NULL), NO_ERROR);
+    CHECK_EQ(lk_file_write_from(f, 0, 0, m, 0, PAGE, &n, NULL), ERR_ACCESS_DENIED);
+    CHECK_EQ(lk_handle_close(f), NO_ERROR);
+
+    // its last handle closed, the object lives on in its mappings
+    fill(rw, 4 * PAGE, 5);
+    CHECK_EQ(lk_handle_close(m), NO_ERROR);
+    CHECK(same(ro, rw + PAGE, 2 * PAGE));
+    CHECK_EQ(lk_vm_unmap(vm_h, ro + PAGE), NO_ERROR);
+    CHECK_EQ(lk_vm_unmap(vm_h, rw), NO_ERROR);
+
+    say("CALLTEST: memory objects ok\n");
+}
+
 void _start_c(const struct lk_proc_args *args) __attribute__((noreturn));
 void _start_c(const struct lk_proc_args *args) {
     test_put("CALLTEST: start\n");
@@ -786,6 +993,7 @@ void _start_c(const struct lk_proc_args *args) {
     test_handles();
     test_endpoints();
     test_transport();
+    test_carried();
     test_echo();
     test_vm();
     test_time();
@@ -793,6 +1001,7 @@ void _start_c(const struct lk_proc_args *args) {
     test_reply_handles();
     test_files();
     test_paths();
+    test_memobj();
 
     test_check_failures();
     say("CALLTEST: PASS\n");

@@ -18,6 +18,7 @@
 #include <sys/svc/file.h>
 #include <sys/svc/namespace.h>
 
+#include "../memobj.h"
 #include "open_file.h"
 #include "svc.h"
 
@@ -247,8 +248,72 @@ lk_status_t file_readdir(kcall &c, open_file &f) {
     return n < 0 ? static_cast<lk_status_t>(n) : NO_ERROR;
 }
 
+// READ_INTO and WRITE_FROM: the file system reads into or writes out of the memory object's
+// pages directly, in one piece.
+lk_status_t file_memobj_io(kcall &c, open_file &f, bool into) {
+    lk_file_io_req req;
+    lk_status_t err = c.args(&req);
+    if (err == NO_ERROR) {
+        err = c.expect_handles(1);
+    }
+    if (err < 0) {
+        return err;
+    }
+    if (f.is_dir()) {
+        return ERR_NOT_FILE;
+    }
+    if (!(f.flags & (into ? LK_NS_OPEN_READ : LK_NS_OPEN_WRITE))) {
+        return ERR_ACCESS_DENIED;
+    }
+    if ((req.flags & ~(into ? 0u : LK_FILE_WRITE_APPEND)) || req.off > kMaxOffset) {
+        return ERR_INVALID_ARGS;
+    }
+    lk::ref_ptr<memobj> m;
+    err = c.handle_as(0, into ? LK_RIGHT_WRITE : LK_RIGHT_READ, &m);
+    if (err < 0) {
+        return err;
+    }
+    if (req.mem_off > m->size() || req.len > m->size() - req.mem_off) {
+        return ERR_INVALID_ARGS;
+    }
+    // where the count would be lost, move nothing
+    if (c.reply_capacity() < sizeof(lk_file_io_reply)) {
+        return ERR_NOT_ENOUGH_BUFFER;
+    }
+
+    uint64_t off = req.off;
+    if (req.flags & LK_FILE_WRITE_APPEND) {
+        file_stat st;
+        err = fs_stat_file(f.fh, &st);
+        if (err < 0) {
+            return err;
+        }
+        off = st.size;
+    }
+    uint64_t len = req.len;
+    if (len > kMaxOffset - off) {
+        if (!into) {
+            return ERR_INVALID_ARGS;
+        }
+        len = kMaxOffset - off;
+    }
+
+    uint8_t *mem = m->kva(static_cast<size_t>(req.mem_off));
+    const ssize_t n = into ? fs_read_file(f.fh, mem, static_cast<off_t>(off), static_cast<size_t>(len))
+                           : fs_write_file(f.fh, mem, static_cast<off_t>(off), static_cast<size_t>(len));
+    if (n < 0) {
+        return static_cast<lk_status_t>(n);
+    }
+    return c.reply(lk_file_io_reply{
+        .end = off + n, .count = static_cast<uint32_t>(n), .reserved = 0});
+}
+
 lk_status_t file_handler(kcall &c) {
     open_file &f = record(c);
+    // only the memory object ops take a handle
+    if (c.nhandles() != 0 && c.op() != LK_FILE_READ_INTO && c.op() != LK_FILE_WRITE_FROM) {
+        return ERR_INVALID_ARGS;
+    }
     switch (c.op()) {
         case LK_FILE_READ:
             return file_read(c, f);
@@ -260,6 +325,10 @@ lk_status_t file_handler(kcall &c) {
             return file_truncate(c, f);
         case LK_FILE_READDIR:
             return file_readdir(c, f);
+        case LK_FILE_READ_INTO:
+            return file_memobj_io(c, f, true);
+        case LK_FILE_WRITE_FROM:
+            return file_memobj_io(c, f, false);
         default:
             return ERR_NOT_SUPPORTED;
     }

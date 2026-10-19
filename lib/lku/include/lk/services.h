@@ -30,6 +30,23 @@ lk_status_t lk_console_read(lk_handle_t console, void *buf, size_t max, size_t *
 lk_status_t lk_console_winsize(lk_handle_t console, uint32_t *cols, uint32_t *rows);
 
 lk_status_t lk_process_info(lk_handle_t process, struct lk_process_info *info);
+// about another process, by a handle to it (lent)
+lk_status_t lk_process_info_of(lk_handle_t process, lk_handle_t proc, struct lk_process_info *info);
+// ends every thread of proc (lent); it exits with LK_PROCESS_KILLED
+lk_status_t lk_process_kill(lk_handle_t process, lk_handle_t proc);
+// /path as argv[0..argc), flags LK_PROCESS_SPAWN_*. The child is born with handles[i] under
+// tags[i], moved out of this process. *child (if not NULL) gets a handle to it, *pid its pid.
+lk_status_t lk_process_spawn(lk_handle_t process, const char *path, int argc,
+                             const char *const *argv, uint32_t flags, const lk_handle_t *handles,
+                             const uint32_t *tags, size_t nhandles, lk_handle_t *child,
+                             uint32_t *pid);
+// a thread starting at entry with sp; *thread gets a handle to it
+lk_status_t lk_process_thread_create(lk_handle_t process, uintptr_t entry, uintptr_t sp,
+                                     lk_handle_t *thread, uint32_t *tid);
+// A thread running fn(arg) on [stack, stack + stack_size), which leaves with lk_thread_exit
+// when fn returns. The process has no thread-local storage: newlib is not safe in it.
+lk_status_t lk_thread_start(lk_handle_t process, void (*fn)(void *), void *arg, void *stack,
+                            size_t stack_size, lk_handle_t *thread);
 
 lk_status_t lk_time_sleep(lk_handle_t time, uint64_t ns);
 lk_status_t lk_time_clock_read(lk_handle_t time, uint32_t clock, uint64_t *ns);
@@ -38,6 +55,13 @@ lk_status_t lk_time_clock_read(lk_handle_t time, uint32_t clock, uint64_t *ns);
 lk_status_t lk_vm_alloc(lk_handle_t vm, size_t size, uint32_t prot, void **va);
 // the region holding va
 lk_status_t lk_vm_unmap(lk_handle_t vm, void *va);
+// a new memory object of size bytes (rounded up to pages, *actual if not NULL), flags
+// LK_VM_MEMOBJ_*; *memobj gets a handle to it
+lk_status_t lk_vm_memobj_create(lk_handle_t vm, size_t size, uint32_t flags, lk_handle_t *memobj,
+                                size_t *actual);
+// maps [off, off + len) of memobj (lent; len 0 to its end) with prot
+lk_status_t lk_vm_memobj_map(lk_handle_t vm, lk_handle_t memobj, size_t off, size_t len,
+                             uint32_t prot, void **va);
 
 // Paths are absolute and NUL-terminated. lk_ns_open's *file is a connection speaking the file
 // protocol, to close with lk_handle_close; st may be NULL.
@@ -59,6 +83,11 @@ lk_status_t lk_file_truncate(lk_handle_t file, uint64_t size);
 // end, ERR_NOT_ENOUGH_BUFFER for a name longer than cap - 1
 lk_status_t lk_file_readdir(lk_handle_t dir, uint32_t index, char *name, size_t cap,
                             size_t *name_len);
+// Between the file at off and memobj (lent) at mem_off, len bytes at most: *count moved.
+lk_status_t lk_file_read_into(lk_handle_t file, uint64_t off, lk_handle_t memobj, size_t mem_off,
+                              size_t len, size_t *count);
+lk_status_t lk_file_write_from(lk_handle_t file, uint64_t off, uint32_t flags, lk_handle_t memobj,
+                               size_t mem_off, size_t len, size_t *count, uint64_t *end);
 
 #ifdef __cplusplus
 }

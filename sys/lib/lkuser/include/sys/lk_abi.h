@@ -95,6 +95,13 @@ LK_ABI_ASSERT(offsetof(struct lk_proc_handle, handle) == 4);
 #define LK_TAG_TEST_BASE 0x1000u
 #define LK_TAG_TEST_ECHO (LK_TAG_TEST_BASE + 0)
 
+// Tags from here up are the spawner's own: handles a program is born with by agreement with
+// whoever spawns it (process.SPAWN), such as a memory object to work in.
+#define LK_TAG_USER_BASE 0x10000u
+
+// What wait() watches: bits an object raises as its state changes.
+#define LK_SIGNAL_TERMINATED (1u << 0) // a process or thread has ended; stays raised
+
 static inline const uint32_t *lk_proc_args_offsets(const struct lk_proc_args *a) {
     return (const uint32_t *)(a + 1);
 }

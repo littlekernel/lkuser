@@ -36,6 +36,10 @@ lk_status_t echo_echo(kcall &c) {
 }
 
 lk_status_t echo_handler(kcall &c) {
+    // no op takes a handle
+    if (c.nhandles() != 0) {
+        return ERR_INVALID_ARGS;
+    }
     switch (c.op()) {
         case LK_ECHO_ECHO:
             return echo_echo(c);

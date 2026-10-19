@@ -49,8 +49,9 @@ public:
                           user_ptr<lk_handle_t> out);
 
     // The object h names, if the handle has every right in need: ERR_BAD_HANDLE for no such
-    // handle, then ERR_ACCESS_DENIED for a missing right.
-    status_t get(lk_handle_t h, uint32_t need, lk::ref_ptr<object> *out);
+    // handle, then ERR_ACCESS_DENIED for a missing right. *rights, if not null, gets the
+    // handle's rights.
+    status_t get(lk_handle_t h, uint32_t need, lk::ref_ptr<object> *out, uint32_t *rights = nullptr);
 
     // As get(), and then ERR_BAD_HANDLE unless the object is a T.
     template <typename T>

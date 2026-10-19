@@ -24,6 +24,7 @@
 
 #include <arch.h>
 #include <lk/err.h>
+#include <sys/lk_abi.h>
 
 #include "proc.h"
 
@@ -37,14 +38,24 @@ uint32_t next_tid = 1;
 
 thread::thread(proc *p, vaddr_t entry, vaddr_t sp)
     : object(kKind), proc_(p), tid_(__atomic_fetch_add(&next_tid, 1, __ATOMIC_RELAXED)),
-      entry_(entry), sp_(sp) {}
+      entry_(entry), sp_(sp) {
+    wait_queue_init(&wait_queue_);
+}
 
-thread::~thread() = default;
+thread::~thread() {
+    THREAD_LOCK(state);
+    wait_queue_destroy(&wait_queue_, false);
+    THREAD_UNLOCK(state);
+}
 
 int thread::start_routine(void *arg) {
     thread *t = static_cast<thread *>(arg);
 
     tls_set(TLS_ENTRY_LKUSER, reinterpret_cast<uintptr_t>(t));
+    // killed before it ever ran: user mode would only meet the kill at its first trap
+    if (thread_signals(get_current_thread()) & THREAD_SIGNAL_KILL) {
+        exit_current();
+    }
     arch_enter_uspace(t->entry_, t->sp_);
 
     __UNREACHABLE;
@@ -55,16 +66,29 @@ status_t thread::create(proc *p, vaddr_t entry, vaddr_t sp, lk::ref_ptr<thread> 
     if (!t) {
         return ERR_NO_MEMORY;
     }
+    *out = std::move(t);
+    return NO_ERROR;
+}
 
-    if (!thread_create_etc(&t->lkthread_, p->name(), &start_routine, t.get(), LOW_PRIORITY,
+status_t thread::create_lk_thread() {
+    if (!thread_create_etc(&lkthread_, proc_->name(), &start_routine, this, LOW_PRIORITY,
                            nullptr, DEFAULT_STACK_SIZE)) {
         return ERR_NO_MEMORY;
     }
     // the LK thread runs in the process's address space from its first instruction
-    t->lkthread_.aspace = p->aspace();
-
-    *out = std::move(t);
+    lkthread_.aspace = proc_->aspace();
     return NO_ERROR;
+}
+
+void thread::exit_current() {
+    thread *t = current();
+    proc *p = t->process();
+
+    if (p->thread_exiting()) {
+        p->exit(0);
+    }
+    t->signal(LK_SIGNAL_TERMINATED);
+    thread_exit(0);
 }
 
 } // namespace lkuser

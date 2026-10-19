@@ -18,9 +18,9 @@ namespace lkuser {
 
 namespace {
 
-// LK's timers count whole milliseconds from a truncated now, so one thread_sleep can end up to
-// a millisecond early by the microsecond clock CLOCK_READ reports. The sleep therefore runs
-// until that clock passes a deadline, rounded up, so it is never shorter than asked.
+// LK's timers count whole milliseconds from a truncated now, so one sleep can end up to a
+// millisecond early by the microsecond clock CLOCK_READ reports. The sleep therefore runs until
+// that clock passes a deadline, rounded up, so it is never shorter than asked. A kill ends it.
 lk_status_t time_sleep(kcall &c) {
     lk_time_sleep_req req;
     lk_status_t err = c.args(&req);
@@ -34,7 +34,11 @@ lk_status_t time_sleep(kcall &c) {
         const uint64_t left = deadline - now;
         const uint64_t ms = left / 1000 + (left % 1000 != 0);
         // LK sleeps at most ~49 days at once
-        thread_sleep(static_cast<lk_time_t>(MIN(ms, uint64_t{INFINITE_TIME - 1})));
+        err = thread_sleep_etc(static_cast<lk_time_t>(MIN(ms, uint64_t{INFINITE_TIME - 1})),
+                               WAIT_QUEUE_INTERRUPTIBLE);
+        if (err < 0) {
+            return err;
+        }
     }
     return NO_ERROR;
 }
@@ -53,6 +57,10 @@ lk_status_t time_clock_read(kcall &c) {
 }
 
 lk_status_t time_handler(kcall &c) {
+    // no op takes a handle
+    if (c.nhandles() != 0) {
+        return ERR_INVALID_ARGS;
+    }
     switch (c.op()) {
         case LK_TIME_SLEEP:
             return time_sleep(c);

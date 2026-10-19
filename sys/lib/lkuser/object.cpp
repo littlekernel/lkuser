@@ -12,6 +12,7 @@
 #include <stdio.h>
 
 #include "endpoint.h"
+#include "memobj.h"
 #include "proc.h"
 #include "thread.h"
 
@@ -59,6 +60,9 @@ void object::destroy(object *o) {
         case obj_kind::CONNECTION:
             delete static_cast<connection *>(o);
             return;
+        case obj_kind::MEMOBJ:
+            delete static_cast<memobj *>(o);
+            return;
         case obj_kind::PROCESS:
             delete static_cast<proc *>(o);
             return;
@@ -80,6 +84,17 @@ void object::handle_removed() {
     if (old == 1) {
         last_handle_removed(this);
     }
+}
+
+void object::signal(uint32_t set) {
+    LKUSER_IPC_LOCK(state);
+    signals_ |= set;
+    for (wait_edge &e : waiters_) {
+        if (signals_ & e.mask) {
+            wait_queue_wake_all(e.wq, false, NO_ERROR);
+        }
+    }
+    LKUSER_IPC_UNLOCK(state);
 }
 
 void object::last_handle_removed(object *o) {
@@ -107,6 +122,9 @@ void object::for_each(lk::function_ref<void(object &)> fn, bool lock) {
 void object::dump() const {
     printf("%-10s %p refs %d handles %u", kind_name(kind()), this, ref_count_debug(),
            handle_count_debug());
+    if (signals_debug()) {
+        printf(" signals %#x", signals_debug());
+    }
     switch (kind()) {
         case obj_kind::ENDPOINT: {
             const auto *ep = static_cast<const endpoint *>(this);
@@ -122,6 +140,11 @@ void object::dump() const {
         case obj_kind::CONNECTION: {
             const auto *conn = static_cast<const connection *>(this);
             printf(" to %p cookie %#llx", conn->ep(), (unsigned long long)conn->cookie());
+            break;
+        }
+        case obj_kind::MEMOBJ: {
+            const auto *m = static_cast<const memobj *>(this);
+            printf(" size %#zx at %#lx", m->size(), (unsigned long)m->paddr());
             break;
         }
         case obj_kind::PROCESS: {

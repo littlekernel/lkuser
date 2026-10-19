@@ -8,12 +8,15 @@
 #
 # Non-interactive boot test: boots the kernel with a scratch copy of the FAT image attached
 # (the tests write to it, so every run starts from the image as built), runs each app through
-# lk.autorun and powers off. Passes only when QEMU exits on its own, every app printed
-# "<APP>: PASS" (the name upper-cased), every app exited with code 0, and the kernel never
-# panicked. The console log and the scratch image are kept for inspection.
+# lk.autorun and powers off. Passes only when QEMU exits on its own, the kernel never panicked,
+# and every app exited with the code it was expected to, printing "<APP>: PASS" (the name
+# upper-cased) if that code is 0. The console log and the scratch image are kept for
+# inspection.
 #
-# Each app is name[:arg...]: /bin/<name> runs with the arguments after it, so
-# "rawtest:a:b:c" runs "lkuser load /bin/rawtest a b c".
+# Each app is name[:arg...][=code]: /bin/<name> runs with the arguments after it, so
+# "rawtest:a:b:c" runs "lkuser load /bin/rawtest a b c", and is expected to exit with code
+# (default 0), as "lkuser: process <pid> (<name>) exited with code <code>" reports it. Lines for
+# processes the apps start themselves, under other names, are not counted.
 #
 # usage: qemu-test.sh -a <arch> -k <lk.elf> -f <root.fat> -l <log> [-t <secs>] [-s <smp>] app...
 
@@ -27,7 +30,7 @@ timeout_secs=60
 smp=1
 
 usage() {
-    echo "usage: $0 -a <arch> -k <lk.elf> -f <root.fat> -l <log> [-t <secs>] [-s <smp>] name[:arg...]..." >&2
+    echo "usage: $0 -a <arch> -k <lk.elf> -f <root.fat> -l <log> [-t <secs>] [-s <smp>] name[:arg...][=code]..." >&2
     exit 2
 }
 
@@ -44,9 +47,22 @@ while getopts "a:k:f:l:t:s:" opt; do
 done
 shift $((OPTIND - 1))
 apps=("$@")
+specs=()
 names=()
+codes=()
 for app in "${apps[@]}"; do
-    names+=("${app%%:*}")
+    spec=${app%%=*}
+    code=0
+    if [[ $app == *=* ]]; then
+        code=${app#*=}
+    fi
+    if ! [[ $code =~ ^-?[0-9]+$ ]]; then
+        echo "$0: '$app': the expected exit code must be a number" >&2
+        exit 2
+    fi
+    specs+=("$spec")
+    names+=("${spec%%:*}")
+    codes+=("$code")
 done
 
 if [ -z "$arch" ] || [ -z "$kernel" ] || [ -z "$fsimage" ] || [ -z "$log" ] || [ ${#apps[@]} -eq 0 ]; then
@@ -72,8 +88,8 @@ done
 
 # '+' is a space to lib/cmdline; a literal space would end the argument
 autorun="mount+/fs+fat+virtio0;lkuser+root+/fs;"
-for app in "${apps[@]}"; do
-    IFS=: read -r -a parts <<<"$app"
+for spec in "${specs[@]}"; do
+    IFS=: read -r -a parts <<<"$spec"
     load="lkuser+load+/bin/${parts[0]}"
     for arg in "${parts[@]:1}"; do
         load+="+$arg"
@@ -115,19 +131,40 @@ if grep -qE 'panic \(caller|ASSERT FAILED' <<<"$clean_log"; then
     fail=1
 fi
 
-for name in "${names[@]}"; do
-    token="${name^^}: PASS"
-    if ! grep -qxF "$token" <<<"$clean_log"; then
+for i in "${!names[@]}"; do
+    token="${names[$i]^^}: PASS"
+    if [ "${codes[$i]}" = 0 ] && ! grep -qxF "$token" <<<"$clean_log"; then
         echo "qemu-test: FAIL: no '$token'"
         fail=1
     fi
 done
 
-exits=$(grep -cE 'exited with code 0$' <<<"$clean_log")
-if [ "$exits" -ne ${#apps[@]} ]; then
-    echo "qemu-test: FAIL: $exits of ${#apps[@]} processes exited with code 0"
-    fail=1
-fi
+# every exit of a process named like an app, each with the code an entry expects
+declare -A expected
+for i in "${!names[@]}"; do
+    key="${names[$i]} ${codes[$i]}"
+    expected[$key]=$((${expected[$key]:-0} + 1))
+done
+for key in "${!expected[@]}"; do
+    name=${key% *}
+    code=${key#* }
+    got=$(grep -cE "\($name\) exited with code $code\$" <<<"$clean_log")
+    if [ "$got" -ne "${expected[$key]}" ]; then
+        echo "qemu-test: FAIL: $got of ${expected[$key]} $name processes exited with code $code"
+        fail=1
+    fi
+done
+declare -A runs
+for name in "${names[@]}"; do
+    runs[$name]=$((${runs[$name]:-0} + 1))
+done
+for name in "${!runs[@]}"; do
+    got=$(grep -cE "\($name\) exited with code -?[0-9]+\$" <<<"$clean_log")
+    if [ "$got" -ne "${runs[$name]}" ]; then
+        echo "qemu-test: FAIL: $got exits of $name processes, ${runs[$name]} expected"
+        fail=1
+    fi
+done
 
 if [ $fail -ne 0 ]; then
     echo "qemu-test: FAIL (log: $log)"

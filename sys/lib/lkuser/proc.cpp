@@ -36,6 +36,7 @@
 
 #include "copy.h"
 #include "endpoint.h"
+#include "memobj.h"
 #include "svc/svc.h"
 
 namespace lkuser {
@@ -56,6 +57,15 @@ uint32_t next_pid = 1;
 
 } // namespace
 
+// a memory object mapped at [va, va + len)
+struct proc::mapping : lk::list_hook<> {
+    mapping(size_t l, lk::ref_ptr<memobj> m) : len(l), obj(std::move(m)) {}
+
+    vaddr_t va = 0;
+    const size_t len;
+    const lk::ref_ptr<memobj> obj;
+};
+
 proc::proc(uint32_t pid) : object(kKind), pid_(pid) {
     event_init(&exit_event_, false, 0);
 }
@@ -63,12 +73,14 @@ proc::proc(uint32_t pid) : object(kKind), pid_(pid) {
 proc::~proc() {
     DEBUG_ASSERT(threads_.is_empty());
     free_aspace();
+    drop_mappings();
     free(args_);
     event_destroy(&exit_event_);
 }
 
-status_t proc::create(int argc, const char *const *argv, lk::ref_ptr<proc> *out) {
-    if (argc < 1) {
+status_t proc::create(int argc, const char *const *argv, bool services,
+                      const startup_handle *extra, size_t nextra, lk::ref_ptr<proc> *out) {
+    if (argc < 1 || nextra > LK_MSG_MAX_HANDLES) {
         return ERR_INVALID_ARGS;
     }
 
@@ -82,16 +94,30 @@ status_t proc::create(int argc, const char *const *argv, lk::ref_ptr<proc> *out)
     const char *slash = strrchr(argv[0], '/');
     strlcpy(p->name_, slash ? slash + 1 : argv[0], sizeof(p->name_));
 
-    size_t nservices;
-    const service *svcs = services(&nservices);
-    lk_proc_handle handles[kMaxServices];
+    lk_proc_handle handles[kMaxServices + LK_MSG_MAX_HANDLES];
     size_t nhandles = 0;
-    for (size_t i = 0; i < nservices; i++) {
-        if (svcs[i].tag == kNoTag) {
-            continue;
+    if (services) {
+        size_t nservices;
+        const service *svcs = lkuser::services(&nservices);
+        for (size_t i = 0; i < nservices; i++) {
+            bool replaced = false;
+            for (size_t j = 0; j < nextra; j++) {
+                replaced |= extra[j].tag == svcs[i].tag;
+            }
+            if (svcs[i].tag == kNoTag || replaced) {
+                continue;
+            }
+            handles[nhandles].tag = svcs[i].tag;
+            status_t err = connect(p.get(), svcs[i].ep, &handles[nhandles].handle);
+            if (err < 0) {
+                return err;
+            }
+            nhandles++;
         }
-        handles[nhandles].tag = svcs[i].tag;
-        status_t err = connect(p.get(), svcs[i].ep, &handles[nhandles].handle);
+    }
+    for (size_t j = 0; j < nextra; j++) {
+        handles[nhandles].tag = extra[j].tag;
+        status_t err = p->handles_.add(extra[j].obj, extra[j].rights, &handles[nhandles].handle);
         if (err < 0) {
             return err;
         }
@@ -183,24 +209,46 @@ status_t proc::start(vaddr_t entry) {
     if (err < 0) {
         return err;
     }
-    // nothing fails past here: a created LK thread has to run
-    free_stack.cancel();
-    free(args_);
-    args_ = nullptr;
-
     {
         AutoLock guard(lock_);
+        err = t->create_lk_thread();
+        if (err < 0) {
+            return err;
+        }
+        // nothing fails past here: a created LK thread has to run
+        free_stack.cancel();
         state_ = state::RUNNING;
         live_threads_ = 1;
         t->add_ref();
         threads_.push_back(t.get());
     }
+    free(args_);
+    args_ = nullptr;
     {
         AutoLock guard(proc_list_lock);
         add_ref();
         proc_list.push_back(this);
     }
 
+    t->resume();
+    return NO_ERROR;
+}
+
+status_t proc::start_thread(thread *t) {
+    {
+        AutoLock guard(lock_);
+        if (state_ != state::RUNNING) {
+            return ERR_BAD_STATE;
+        }
+        status_t err = t->create_lk_thread();
+        if (err < 0) {
+            return err;
+        }
+        live_threads_++;
+        t->add_ref();
+        threads_.push_back(t);
+    }
+    // an exit from here on has killed it, and it leaves before entering user space
     t->resume();
     return NO_ERROR;
 }
@@ -213,6 +261,9 @@ void proc::exit(int code) {
         }
         state_ = state::DEAD;
         exit_code_ = code;
+        for (thread &t : threads_) {
+            t.kill();
+        }
     }
 
     handles_.close_all();
@@ -233,9 +284,80 @@ int proc::wait() {
     return exit_code_;
 }
 
-bool proc::exited() {
+bool proc::exited(int *code) {
+    AutoLock guard(lock_);
+    if (state_ != state::DEAD) {
+        return false;
+    }
+    *code = exit_code_;
+    return true;
+}
+
+bool proc::is_dead() {
     AutoLock guard(lock_);
     return state_ == state::DEAD;
+}
+
+status_t proc::map(lk::ref_ptr<memobj> m, size_t off, size_t len, uint arch_mmu_flags,
+                   vaddr_t *va) {
+    const paddr_t pa = m->paddr() + off;
+    auto *mp = new (std::nothrow) mapping(len, std::move(m));
+    if (!mp) {
+        return ERR_NO_MEMORY;
+    }
+
+    void *ptr = nullptr;
+    status_t err;
+    {
+        AutoLock guard(mappings_lock_);
+        err = vmm_alloc_physical(aspace_, "memobj", len, &ptr, PAGE_SIZE_SHIFT, pa, 0,
+                                 arch_mmu_flags);
+        if (err == NO_ERROR) {
+            mp->va = reinterpret_cast<vaddr_t>(ptr);
+            mappings_.push_back(mp);
+            *va = mp->va;
+            return NO_ERROR;
+        }
+    }
+    // the memory object's reference goes outside the lock
+    delete mp;
+    return err;
+}
+
+status_t proc::unmap(vaddr_t va) {
+    mapping *found = nullptr;
+    status_t err;
+    {
+        AutoLock guard(mappings_lock_);
+        for (mapping &m : mappings_) {
+            if (va >= m.va && va - m.va < m.len) {
+                found = &m;
+                break;
+            }
+        }
+        err = vmm_free_region(aspace_, va);
+        if (found && err == NO_ERROR) {
+            mappings_.remove(found);
+        } else {
+            found = nullptr;
+        }
+    }
+    delete found;
+    return err;
+}
+
+void proc::drop_mappings() {
+    for (;;) {
+        mapping *m;
+        {
+            AutoLock guard(mappings_lock_);
+            m = mappings_.pop_front();
+        }
+        if (!m) {
+            return;
+        }
+        delete m;
+    }
 }
 
 void proc::reap_exited() {
@@ -244,7 +366,7 @@ void proc::reap_exited() {
         {
             AutoLock guard(proc_list_lock);
             for (proc &p : proc_list) {
-                if (p.exited()) {
+                if (p.is_dead()) {
                     found = &p;
                     break;
                 }
@@ -258,6 +380,7 @@ void proc::reap_exited() {
         }
 
         found->teardown();
+        found->signal(LK_SIGNAL_TERMINATED);
         // proc_list's reference
         found->release();
     }
@@ -281,6 +404,7 @@ void proc::teardown() {
     }
 
     free_aspace();
+    drop_mappings();
 }
 
 void proc::free_aspace() {

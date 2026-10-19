@@ -40,17 +40,15 @@
 
 namespace lkuser {
 
+// Ends the process; its other threads leave at their next way out of the kernel.
 void sys_exit(int code) {
     thread::current()->process()->exit(code);
-    thread_exit(code);
+    thread::exit_current();
 }
 
+// The last thread out ends the process with code 0.
 void sys_thread_exit() {
-    proc *p = thread::current()->process();
-    if (p->thread_exiting()) {
-        p->exit(0);
-    }
-    thread_exit(0);
+    thread::exit_current();
 }
 
 // Writes the bytes as they are, with nothing added, straight to the kernel console.
@@ -85,7 +83,6 @@ status_t sys_connection_signal(lk_handle_t, uint32_t, uint32_t) { return ERR_NOT
 status_t sys_group_create(user_ptr<lk_handle_t>) { return ERR_NOT_SUPPORTED; }
 status_t sys_group_add(lk_handle_t, lk_handle_t) { return ERR_NOT_SUPPORTED; }
 status_t sys_group_remove(lk_handle_t, lk_handle_t) { return ERR_NOT_SUPPORTED; }
-status_t sys_wait(user_ptr<lk_wait_args>) { return ERR_NOT_SUPPORTED; }
 
 namespace {
 
@@ -163,8 +160,8 @@ extern "C" void riscv_syscall_handler(struct riscv_short_iframe *frame) {
     arch_disable_ints();
 }
 
-// Any other trap from user mode ends the process with ERR_FAULT. Every process has one thread,
-// so ending this one is all it takes.
+// Any other trap from user mode ends the process with ERR_FAULT: this thread leaves now, the
+// others at their next way out of the kernel.
 extern "C" void riscv_user_exception(long cause, ulong epc, struct riscv_short_iframe *frame) {
     lkuser::thread *t = lkuser::thread::current();
     if (!t) {
@@ -180,6 +177,17 @@ extern "C" void riscv_user_exception(long cause, ulong epc, struct riscv_short_i
     // exit takes mutexes, as the syscall path does
     arch_enable_ints();
     p->exit(ERR_FAULT);
-    thread_exit(ERR_FAULT);
+    lkuser::thread::exit_current();
+}
+
+// A killed thread on its way back to user mode, from a syscall, a fault or an interrupt: its
+// process has exited (exit, a fault or process.KILL), so the thread leaves too.
+extern "C" void riscv_user_kill(struct riscv_short_iframe *frame) {
+    // exit_current takes mutexes
+    arch_enable_ints();
+    if (!lkuser::thread::current()) {
+        thread_exit(ERR_INTERRUPTED);
+    }
+    lkuser::thread::exit_current();
 }
 #endif

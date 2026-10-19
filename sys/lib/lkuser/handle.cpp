@@ -64,7 +64,8 @@ status_t handle_table::add_for_user(vmm_aspace_t *aspace, lk::ref_ptr<object> ob
     return NO_ERROR;
 }
 
-status_t handle_table::get(lk_handle_t h, uint32_t need, lk::ref_ptr<object> *out) {
+status_t handle_table::get(lk_handle_t h, uint32_t need, lk::ref_ptr<object> *out,
+                           uint32_t *rights) {
     lk::ref_ptr<object> obj;
     {
         AutoLock guard(lock_);
@@ -76,6 +77,9 @@ status_t handle_table::get(lk_handle_t h, uint32_t need, lk::ref_ptr<object> *ou
             return ERR_ACCESS_DENIED;
         }
         obj = s->obj;
+        if (rights) {
+            *rights = s->rights;
+        }
     }
     // whatever *out held is released here, outside the lock
     *out = std::move(obj);
