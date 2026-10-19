@@ -234,7 +234,8 @@ static void test_endpoints(void) {
     args.flags = 1u << 7;
     CHECK_EQ(lk_endpoint_create(&args, &ep), ERR_INVALID_ARGS);
     args.flags = LK_EP_FLAG_CONNECT_NOTIFY;
-    CHECK_EQ(lk_endpoint_create(&args, &ep), ERR_NOT_SUPPORTED);
+    CHECK_EQ(lk_endpoint_create(&args, &ep), NO_ERROR);
+    CHECK_EQ(lk_handle_close(ep), NO_ERROR);
     args.flags = 0;
 
     CHECK_EQ(lk_endpoint_create(&args, &ep), NO_ERROR);
@@ -248,8 +249,15 @@ static void test_endpoints(void) {
     CHECK_EQ(lk_connect(h, &conn), ERR_ACCESS_DENIED);
     CHECK_EQ(lk_handle_close(h), NO_ERROR);
 
-    // nothing receives on a user endpoint yet
-    CHECK_EQ(lk_msg_call(conn, 1, NULL, 0, NULL, 0, NULL), ERR_NOT_SUPPORTED);
+    // nobody receives on this one, so the call waits out its timeout (ipctest has the rest)
+    struct lk_msg_hdr hdr = {.op = 1};
+    struct lk_msg_hdr rhdr;
+    const struct lk_iov req = {&hdr, sizeof(hdr)};
+    const struct lk_iov reply = {&rhdr, sizeof(rhdr)};
+    struct lk_call_args cargs = {
+        .req = &req, .nreq = 1, .reply = &reply, .nreply = 1, .timeout_ns = 10000000,
+    };
+    CHECK_EQ(lk_call(conn, &cargs), ERR_TIMED_OUT);
     // with the endpoint's last handle gone its connections are dead
     CHECK_EQ(lk_handle_close(ep), NO_ERROR);
     CHECK_EQ(lk_msg_call(conn, 1, NULL, 0, NULL, 0, NULL), ERR_CHANNEL_CLOSED);

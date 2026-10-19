@@ -16,9 +16,10 @@
 #include <stdint.h>
 #include <utility>
 
-// The lock of every queue the IPC touches: object signals and their waiters now, endpoint
-// queues later. It is LK's thread lock, since wait_queue_* need that held; behind a macro so
-// finer locking can replace it. Interrupts are off while it is held: pointer work only.
+// The lock of every queue the IPC touches: object signals and their waiters, endpoint and
+// group queues, inflight slots and impulse pools. It is LK's thread lock, since wait_queue_*
+// need that held; behind a macro so finer locking can replace it. Interrupts are off while it
+// is held: pointer work only, and no reference is dropped under it.
 #define LKUSER_IPC_LOCK(state) THREAD_LOCK(state)
 #define LKUSER_IPC_UNLOCK(state) THREAD_UNLOCK(state)
 
@@ -71,15 +72,19 @@ public:
 
     static void destroy(object *o);
 
-    // A handle naming this object was added to or removed from a table, in any process.
-    // Removing the last one runs the kind's last-handle action (an endpoint closes).
-    void handle_added();
-    void handle_removed();
+    // A handle with rights naming this object was added to or removed from a table, in any
+    // process, or a moved handle went into or came out of transit in a call. Removing the last
+    // one runs the kind's last-handle action (an endpoint closes); for a connection, removing
+    // the last client view runs its own (CONN_CLOSED). Call without LKUSER_IPC_LOCK held.
+    void handle_added(uint32_t rights);
+    void handle_removed(uint32_t rights);
     uint32_t handle_count_debug() const { return __atomic_load_n(&handle_count_, __ATOMIC_RELAXED); }
 
     // Signals (LK_SIGNAL_*): raising one wakes every waiter whose mask it is in.
-    void signal(uint32_t set);
+    void signal(uint32_t set) { update_signals(set, 0); }
+    void update_signals(uint32_t set, uint32_t clear);
     // under LKUSER_IPC_LOCK
+    void update_signals_locked(uint32_t set, uint32_t clear);
     uint32_t signals_locked() const { return signals_; }
     void add_waiter_locked(wait_edge *e) { waiters_.push_back(e); }
     void remove_waiter_locked(wait_edge *e) { waiters_.remove(e); }

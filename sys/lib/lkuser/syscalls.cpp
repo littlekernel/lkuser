@@ -72,18 +72,6 @@ status_t sys_debug_write(user_ptr<const char> buf, size_t len) {
     return NO_ERROR;
 }
 
-// Rows this executive does not serve.
-status_t sys_recv(lk_handle_t, user_ptr<lk_recv_args>) { return ERR_NOT_SUPPORTED; }
-status_t sys_reply(lk_token_t, user_ptr<const lk_reply_args>) { return ERR_NOT_SUPPORTED; }
-status_t sys_impulse_send(lk_handle_t, user_ptr<const lk_impulse>) { return ERR_NOT_SUPPORTED; }
-status_t sys_connection_accept(lk_token_t, uintptr_t, user_ptr<lk_handle_t>) { return ERR_NOT_SUPPORTED; }
-status_t sys_connection_refuse(lk_token_t) { return ERR_NOT_SUPPORTED; }
-status_t sys_connection_set_cookie(lk_handle_t, uintptr_t) { return ERR_NOT_SUPPORTED; }
-status_t sys_connection_signal(lk_handle_t, uint32_t, uint32_t) { return ERR_NOT_SUPPORTED; }
-status_t sys_group_create(user_ptr<lk_handle_t>) { return ERR_NOT_SUPPORTED; }
-status_t sys_group_add(lk_handle_t, lk_handle_t) { return ERR_NOT_SUPPORTED; }
-status_t sys_group_remove(lk_handle_t, lk_handle_t) { return ERR_NOT_SUPPORTED; }
-
 namespace {
 
 constexpr size_t kArgRegs = 6;

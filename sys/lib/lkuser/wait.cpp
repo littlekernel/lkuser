@@ -5,13 +5,15 @@
  * license that can be found in the LICENSE file or at
  * https://opensource.org/licenses/MIT
  */
-// wait(): a thread blocking until an object raises a signal.
+// wait(): a thread blocking until one of several objects raises a signal.
 
 #include <kernel/thread.h>
 #include <lk/err.h>
+#include <platform.h>
 #include <sys/lk_msg.h>
 
 #include "copy.h"
+#include "msg.h"
 #include "object.h"
 #include "proc.h"
 #include "syscalls.h"
@@ -21,21 +23,39 @@ namespace lkuser {
 
 namespace {
 
-// An ABI timeout in LK's milliseconds, rounded up so a wait is never shorter than asked.
-lk_time_t to_lk_time(uint64_t ns) {
-    if (ns == LK_TIME_INFINITE) {
-        return INFINITE_TIME;
+// The first item whose object shows a signal in its mask. Under LKUSER_IPC_LOCK.
+bool first_signaled_locked(const lk::ref_ptr<object> *objs, const lk_wait_item *items, size_t n,
+                           size_t *index, uint32_t *seen) {
+    for (size_t i = 0; i < n; i++) {
+        const uint32_t s = objs[i]->signals_locked();
+        if (s & items[i].mask) {
+            *index = i;
+            *seen = s;
+            return true;
+        }
     }
-    const uint64_t ms = ns / 1000000 + (ns % 1000000 != 0);
-    return static_cast<lk_time_t>(MIN(ms, uint64_t{INFINITE_TIME - 1}));
+    return false;
+}
+
+status_t write_result(vmm_aspace_t *aspace, user_ptr<lk_wait_args> uargs, size_t index,
+                      uint32_t seen) {
+    // index and signals are adjacent out fields
+    status_t err = copy_to_user(aspace, uargs.addr() + offsetof(lk_wait_args, index), &index,
+                                sizeof(index));
+    if (err == NO_ERROR) {
+        err = copy_to_user(aspace, uargs.addr() + offsetof(lk_wait_args, signals), &seen,
+                           sizeof(seen));
+    }
+    return err;
 }
 
 } // namespace
 
-// One item for now: the thread links an edge onto the object and blocks on its own queue, so
-// waiting on several is the same with an edge per item. NO_ERROR once a signal in the mask is
-// up (at once if it already is), ERR_TIMED_OUT if none rose in time; either way index and
-// signals report what the object showed.
+// The thread links an edge onto every object and blocks on its own queue, so one signal from
+// any of them wakes it. NO_ERROR once a signal in an item's mask is up (at once if one already
+// is), and index and signals name the first such item and what its object showed; ERR_TIMED_OUT
+// if none rose in time, reporting item 0. A handle lacking WAIT is ERR_ACCESS_DENIED, and index
+// names it.
 status_t sys_wait(user_ptr<lk_wait_args> uargs) {
     thread *t = thread::current();
     proc *p = t->process();
@@ -45,56 +65,70 @@ status_t sys_wait(user_ptr<lk_wait_args> uargs) {
     if (err < 0) {
         return err;
     }
-    if (args.n == 0) {
+    if (args.n == 0 || args.n > LK_WAIT_MAX_ITEMS) {
         return ERR_INVALID_ARGS;
     }
-    if (args.n > 1) {
-        return ERR_NOT_SUPPORTED;
-    }
-    lk_wait_item item;
-    err = copy_from_user(p->aspace(), &item, reinterpret_cast<vaddr_t>(args.items), sizeof(item));
+    lk_wait_item items[LK_WAIT_MAX_ITEMS];
+    err = copy_from_user(p->aspace(), items, reinterpret_cast<vaddr_t>(args.items),
+                         args.n * sizeof(lk_wait_item));
     if (err < 0) {
         return err;
     }
-    lk::ref_ptr<object> obj;
-    err = p->handles().get(item.h, LK_RIGHT_WAIT, &obj);
-    if (err < 0) {
-        return err;
+    lk::ref_ptr<object> objs[LK_WAIT_MAX_ITEMS];
+    for (size_t i = 0; i < args.n; i++) {
+        err = p->handles().get(items[i].h, LK_RIGHT_WAIT, &objs[i]);
+        if (err < 0) {
+            const status_t cerr = write_result(p->aspace(), uargs, i, 0);
+            return cerr < 0 ? cerr : err;
+        }
     }
 
-    wait_edge edge;
-    edge.wq = t->wait_queue();
-    edge.mask = item.mask;
-    uint32_t seen;
+    wait_edge edges[LK_WAIT_MAX_ITEMS];
+    size_t index = 0;
+    uint32_t seen = 0;
     {
         LKUSER_IPC_LOCK(state);
-        seen = obj->signals_locked();
-        if (seen & item.mask) {
+        if (first_signaled_locked(objs, items, args.n, &index, &seen)) {
             err = NO_ERROR;
         } else {
-            obj->add_waiter_locked(&edge);
-            err = wait_queue_block_etc(t->wait_queue(), to_lk_time(args.timeout_ns),
-                                       WAIT_QUEUE_INTERRUPTIBLE);
-            obj->remove_waiter_locked(&edge);
-            seen = obj->signals_locked();
+            for (size_t i = 0; i < args.n; i++) {
+                edges[i].wq = t->wait_queue();
+                edges[i].mask = items[i].mask;
+                objs[i]->add_waiter_locked(&edges[i]);
+            }
+            // a signal raised and cleared again before this thread ran wakes it for nothing
+            const lk_time_t timeout = to_lk_time(args.timeout_ns);
+            const lk_time_t start = current_time();
+            bool found;
+            for (;;) {
+                lk_time_t left = INFINITE_TIME;
+                if (timeout != INFINITE_TIME) {
+                    const lk_time_t gone = current_time() - start;
+                    left = gone < timeout ? timeout - gone : 0;
+                }
+                err = wait_queue_block_etc(t->wait_queue(), left, WAIT_QUEUE_INTERRUPTIBLE);
+                found = first_signaled_locked(objs, items, args.n, &index, &seen);
+                if (found || err != NO_ERROR) {
+                    break;
+                }
+            }
+            for (size_t i = 0; i < args.n; i++) {
+                objs[i]->remove_waiter_locked(&edges[i]);
+            }
+            if (found) {
+                err = NO_ERROR;
+            } else {
+                index = 0;
+                seen = objs[0]->signals_locked();
+            }
         }
         LKUSER_IPC_UNLOCK(state);
     }
     if (err == ERR_INTERRUPTED) {
         return err;
     }
-    if (seen & item.mask) {
-        err = NO_ERROR;
-    }
 
-    // index and signals are adjacent out fields
-    const size_t index = 0;
-    status_t cerr = copy_to_user(p->aspace(), uargs.addr() + offsetof(lk_wait_args, index),
-                                 &index, sizeof(index));
-    if (cerr == NO_ERROR) {
-        cerr = copy_to_user(p->aspace(), uargs.addr() + offsetof(lk_wait_args, signals), &seen,
-                            sizeof(seen));
-    }
+    const status_t cerr = write_result(p->aspace(), uargs, index, seen);
     return cerr < 0 ? cerr : err;
 }
 

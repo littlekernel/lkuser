@@ -11,7 +11,10 @@ LKUSER_SERVICES ?= console process time vm namespace file
 
 MODULE_SRCS += $(LOCAL_DIR)/copy.cpp
 MODULE_SRCS += $(LOCAL_DIR)/endpoint.cpp
+MODULE_SRCS += $(LOCAL_DIR)/group.cpp
 MODULE_SRCS += $(LOCAL_DIR)/handle.cpp
+MODULE_SRCS += $(LOCAL_DIR)/impulse.cpp
+MODULE_SRCS += $(LOCAL_DIR)/ipc.cpp
 MODULE_SRCS += $(LOCAL_DIR)/memobj.cpp
 MODULE_SRCS += $(LOCAL_DIR)/msg.cpp
 MODULE_SRCS += $(LOCAL_DIR)/object.cpp

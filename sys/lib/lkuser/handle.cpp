@@ -42,7 +42,7 @@ status_t handle_table::add(lk::ref_ptr<object> obj, uint32_t rights, lk_handle_t
         if (h == LK_HANDLE_INVALID) {
             return ERR_NO_RESOURCES;
         }
-        obj->handle_added();
+        obj->handle_added(rights);
         slots_[h - 1] = {std::move(obj), rights};
         *out = h;
     }
@@ -92,6 +92,7 @@ status_t handle_table::close(lk_handle_t h) {
 
 status_t handle_table::close_if(lk_handle_t h, const object *o) {
     lk::ref_ptr<object> obj;
+    uint32_t rights;
     {
         AutoLock guard(lock_);
         slot *s = find_locked(h);
@@ -99,9 +100,10 @@ status_t handle_table::close_if(lk_handle_t h, const object *o) {
             return ERR_BAD_HANDLE;
         }
         obj = std::move(s->obj);
+        rights = s->rights;
         s->rights = 0;
     }
-    obj->handle_removed();
+    obj->handle_removed(rights);
     // obj's reference goes here, outside the lock
     return NO_ERROR;
 }
@@ -122,10 +124,16 @@ status_t handle_table::dup(lk_handle_t h, uint32_t mask, lk_handle_t *out) {
     if (nh == LK_HANDLE_INVALID) {
         return ERR_NO_RESOURCES;
     }
-    s->obj->handle_added();
-    slots_[nh - 1] = {s->obj, s->rights & mask};
+    const uint32_t rights = (s->rights & mask & LK_RIGHTS_ALL) | (s->rights & kRightPeerView);
+    s->obj->handle_added(rights);
+    slots_[nh - 1] = {s->obj, rights};
     *out = nh;
     return NO_ERROR;
+}
+
+bool handle_table::has_free_slot() {
+    AutoLock guard(lock_);
+    return !closed_ && free_handle_locked() != LK_HANDLE_INVALID;
 }
 
 void handle_table::close_all() {
@@ -136,13 +144,15 @@ void handle_table::close_all() {
     // one slot at a time, so no reference is dropped under the lock
     for (size_t i = 0; i < LKUSER_HANDLES; i++) {
         lk::ref_ptr<object> obj;
+        uint32_t rights;
         {
             AutoLock guard(lock_);
             obj = std::move(slots_[i].obj);
+            rights = slots_[i].rights;
             slots_[i].rights = 0;
         }
         if (obj) {
-            obj->handle_removed();
+            obj->handle_removed(rights);
         }
     }
 }
@@ -151,7 +161,8 @@ void handle_table::dump_locked() const {
     for (size_t i = 0; i < LKUSER_HANDLES; i++) {
         const slot &s = slots_[i];
         if (s.obj) {
-            printf("  %3zu: rights %#06x ", i + 1, s.rights);
+            printf("  %3zu: rights %#06x%s ", i + 1, s.rights & LK_RIGHTS_ALL,
+                   (s.rights & kRightPeerView) ? " peer" : "");
             s.obj->dump();
         }
     }

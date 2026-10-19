@@ -275,12 +275,18 @@ static void test_threads(void) {
     CHECK_EQ(lk_process_thread_create(process_h, (uintptr_t)&thread_body, sp - 8, &t, NULL),
              ERR_INVALID_ARGS);
 
-    // wait() itself: one item for now, a handle with WAIT, a timeout
-    struct lk_wait_item items[2] = {{console_h, LK_SIGNAL_TERMINATED}, {console_h, 0}};
+    // wait() itself: one to LK_WAIT_MAX_ITEMS items, a handle with WAIT, a timeout (ipctest
+    // waits on several)
+    struct lk_wait_item items[LK_WAIT_MAX_ITEMS + 1];
+    for (int i = 0; i <= LK_WAIT_MAX_ITEMS; i++) {
+        items[i] = (struct lk_wait_item){console_h, LK_SIGNAL_TERMINATED};
+    }
     struct lk_wait_args args = {.items = items, .n = 0, .timeout_ns = 0};
     CHECK_EQ(lk_wait(&args), ERR_INVALID_ARGS);
-    args.n = 2;
-    CHECK_EQ(lk_wait(&args), ERR_NOT_SUPPORTED);
+    args.n = LK_WAIT_MAX_ITEMS + 1;
+    CHECK_EQ(lk_wait(&args), ERR_INVALID_ARGS);
+    args.n = LK_WAIT_MAX_ITEMS;
+    CHECK_EQ(lk_wait(&args), ERR_TIMED_OUT);
     CHECK_EQ(lk_wait_one(NOT_A_HANDLE, LK_SIGNAL_TERMINATED, 0, NULL), ERR_BAD_HANDLE);
     CHECK_EQ(lk_wait_one(console_h, LK_SIGNAL_TERMINATED, 0, NULL), ERR_TIMED_OUT);
     const uint64_t start = now_ns();

@@ -67,8 +67,7 @@ static void test_debug_write(void) {
 }
 
 static void test_unserved(void) {
-    // a row with no handler, the first number past the table, and one far past it
-    CHECK_EQ(lk_recv(LK_HANDLE_INVALID, NULL), ERR_NOT_SUPPORTED);
+    // the first number past the table, and one far past it
     CHECK_EQ(raw_syscall(21), ERR_NOT_SUPPORTED);
     CHECK_EQ(raw_syscall(~0ul), ERR_NOT_SUPPORTED);
     test_put("RAWTEST: unserved syscalls ok\n");

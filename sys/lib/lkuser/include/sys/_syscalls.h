@@ -28,8 +28,8 @@
 //
 // Trap ABI (riscv): number in a7, arguments in a0-a5, the result in a0, LK's NO_ERROR or a
 // negative ERR_*. Arguments follow the argument-width rule of <sys/lk_abi.h>: each fits one
-// register today, and times travel in the argument structures. A row without a kernel handler
-// returns ERR_NOT_SUPPORTED, as does a number past the end of the table.
+// register today, and times travel in the argument structures. A number past the end of the
+// table returns ERR_NOT_SUPPORTED.
 
 LK_SYSCALL_DEF(0,  void,        exit,                  int code)
 LK_SYSCALL_DEF(1,  void,        thread_exit,           void)

@@ -7,6 +7,7 @@
  */
 #include "msg.h"
 
+#include <kernel/thread.h>
 #include <lk/err.h>
 #include <stdint.h>
 #include <sys/types.h>
@@ -90,6 +91,47 @@ ssize_t msg_buffer::write(size_t off, const void *buf, size_t len) const {
     return walk(off, len, [this, src](vaddr_t uaddr, size_t pos, size_t n) {
         return copy_to_user(aspace_, uaddr, src + pos, n);
     });
+}
+
+status_t copy_msg(const msg_buffer &src, size_t src_off, const msg_buffer &dst, size_t dst_off,
+                  size_t len, copy_fault *fault) {
+    uint8_t buf[256];
+    *fault = copy_fault::NONE;
+    while (len > 0) {
+        const size_t chunk = MIN(len, sizeof(buf));
+        if (src.read(src_off, buf, chunk) != static_cast<ssize_t>(chunk)) {
+            *fault = copy_fault::SRC;
+            return ERR_FAULT;
+        }
+        if (dst.write(dst_off, buf, chunk) != static_cast<ssize_t>(chunk)) {
+            *fault = copy_fault::DST;
+            return ERR_FAULT;
+        }
+        src_off += chunk;
+        dst_off += chunk;
+        len -= chunk;
+    }
+    return NO_ERROR;
+}
+
+pending_call::pending_call(thread *t) : owner(t) {
+    wait_queue_init(&done);
+    wait_queue_init(&idle);
+}
+
+pending_call::~pending_call() {
+    THREAD_LOCK(lock_state);
+    wait_queue_destroy(&done, false);
+    wait_queue_destroy(&idle, false);
+    THREAD_UNLOCK(lock_state);
+}
+
+lk_time_t to_lk_time(uint64_t ns) {
+    if (ns == LK_TIME_INFINITE) {
+        return INFINITE_TIME;
+    }
+    const uint64_t ms = ns / 1000000 + (ns % 1000000 != 0);
+    return static_cast<lk_time_t>(MIN(ms, uint64_t{INFINITE_TIME - 1}));
 }
 
 } // namespace lkuser

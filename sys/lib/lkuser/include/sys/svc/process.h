@@ -15,7 +15,8 @@
 // (lent, LK_RIGHT_INFO) about that process. reply: struct lk_process_info
 #define LK_PROCESS_INFO 1u
 // request: struct lk_process_spawn_req, the image's path, then the arguments; the handles it
-// carries are moved, never lent, and the child is born with them under the request's tags.
+// carries are moved, never lent, and the child is born with them under the request's tags,
+// except one under LK_PROCESS_SPAWN_TAG_EXIT_NOTIFY.
 // reply: struct lk_process_spawn_reply and a handle to the child (WAIT INFO KILL DUP
 // TRANSFER), which wait() sees LK_SIGNAL_TERMINATED on once every thread has ended
 #define LK_PROCESS_SPAWN 2u
@@ -49,6 +50,11 @@ LK_ABI_ASSERT(offsetof(struct lk_process_info, reserved) == 12);
 // Connect the child to every kernel service that has a startup tag, as the processes the
 // console starts are; a carried handle under one of those tags takes its place.
 #define LK_PROCESS_SPAWN_SERVICES (1u << 0)
+
+// A handle carried under this tag is not given to the child. It is a connection to a user
+// endpoint, with IMPULSE, which the kernel holds until the child has ended and its memory is
+// freed, then sends LK_IMPULSE_PROCESS_EXITED over and closes.
+#define LK_PROCESS_SPAWN_TAG_EXIT_NOTIFY 0xffffffffu
 
 // the most arguments a spawn passes, and their bytes
 #define LK_PROCESS_SPAWN_NARGS_MAX 64

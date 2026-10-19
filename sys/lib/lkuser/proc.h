@@ -31,6 +31,8 @@
 #include <stdint.h>
 
 #include "handle.h"
+#include "impulse.h"
+#include "ipc.h"
 #include "object.h"
 #include "thread.h"
 
@@ -64,9 +66,9 @@ public:
     // Makes t's LK thread and runs it: ERR_BAD_STATE once the process has exited.
     status_t start_thread(thread *t);
 
-    // Ends the process with code: closes its handles and kills every thread, the caller's
-    // too if it is one of them, so each leaves at its next way out of the kernel or
-    // interruptible wait. The first call wins. Callable from any thread.
+    // Ends the process with code: ends the calls it has received, closes its handles and kills
+    // every thread, the caller's too if it is one of them, so each leaves at its next way out
+    // of the kernel or interruptible wait. The first call wins. Callable from any thread.
     void exit(int code);
 
     // A thread is leaving. Returns true if it was the last one, in which case the caller ends
@@ -86,13 +88,26 @@ public:
     status_t unmap(vaddr_t va);
 
     // Frees the threads and address spaces of exited processes, then raises their
-    // LK_SIGNAL_TERMINATED. Run by the reaper thread.
+    // LK_SIGNAL_TERMINATED and sends the PROCESS_EXITED impulse. Run by the reaper thread.
     static void reap_exited();
+
+    // The connection to send PROCESS_EXITED over once the process has ended, which the kernel
+    // holds as a handle with rights until then (process.SPAWN). Before start().
+    void set_exit_notify(lk::ref_ptr<object> conn, uint32_t rights);
 
     uint32_t pid() const { return pid_; }
     const char *name() const { return name_; }
     vmm_aspace_t *aspace() const { return aspace_; }
     handle_table &handles() { return handles_; }
+
+    // IPC state, under LKUSER_IPC_LOCK, worked by ipc.cpp and impulse.cpp: the calls the
+    // process has received, whether it can receive more (not once it has exited), and the pool
+    // impulse_send takes from.
+    inflight_slot inflight[LKUSER_INFLIGHT];
+    uintptr_t inflight_gen = 0;
+    bool ipc_dead = false;
+    impulse_node impulse_pool[LKUSER_IMPULSE_POOL];
+    lk::list<impulse_node> free_impulses;
 
 private:
     friend class object;
@@ -107,6 +122,7 @@ private:
                         size_t nhandles);
     bool is_dead();
     void teardown();
+    void notify_exit();
     void free_aspace();
     void drop_mappings();
 
@@ -136,6 +152,10 @@ private:
     lk::list<mapping> mappings_;
 
     event_t exit_event_;
+
+    lk::ref_ptr<object> exit_notify_;
+    uint32_t exit_notify_rights_ = 0;
+    impulse_node exit_impulse_;
 };
 
 } // namespace lkuser

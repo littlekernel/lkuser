@@ -100,7 +100,14 @@ LK_ABI_ASSERT(offsetof(struct lk_proc_handle, handle) == 4);
 #define LK_TAG_USER_BASE 0x10000u
 
 // What wait() watches: bits an object raises as its state changes.
-#define LK_SIGNAL_TERMINATED (1u << 0) // a process or thread has ended; stays raised
+#define LK_SIGNAL_TERMINATED  (1u << 0) // a process or thread has ended; stays raised
+#define LK_SIGNAL_READABLE    (1u << 1) // an endpoint has a call or impulse queued; a connection: server-set
+#define LK_SIGNAL_WRITABLE    (1u << 2) // a connection: server-set
+#define LK_SIGNAL_ERROR       (1u << 3) // a connection: server-set
+#define LK_SIGNAL_PEER_CLOSED (1u << 4) // a connection's endpoint has closed; stays raised
+
+// the signals a server sets and clears on its connections with connection_signal
+#define LK_SIGNAL_CONN_SERVER (LK_SIGNAL_READABLE | LK_SIGNAL_WRITABLE | LK_SIGNAL_ERROR)
 
 static inline const uint32_t *lk_proc_args_offsets(const struct lk_proc_args *a) {
     return (const uint32_t *)(a + 1);

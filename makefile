@@ -165,15 +165,16 @@ else ifeq ($(ARCH),riscv)
 	qemu-system-riscv64 -m 512 -smp 1 -machine virt -cpu rv64 -bios default -kernel build-$(LK_TESTPROJECT)/lk.elf -nographic -drive if=none,file=$(BUILDDIR)/root.fat,id=blk,format=raw -device virtio-blk-device,drive=blk
 endif
 
-# apps run in order by test-auto, each as name[:arg...][=code]; each must exit with code
-# (default 0), and one that exits 0 must print <NAME>: PASS (upper-cased)
-TEST_APPS ?= rawtest:a:b:c calltest boottest posixtest spawntest faulttest=-40
+# apps run in order by test-auto, each as name[:arg...][&][=code]; each must exit with code
+# (default 0), and one that exits 0 must print <NAME>: PASS (upper-cased). One with & runs in
+# the background while the rest run, and must end by itself.
+TEST_APPS ?= rawtest:a:b:c calltest boottest posixtest spawntest faulttest=-40 ipctest echoserver& echotest
 TEST_TIMEOUT ?= 60
 TEST_SMP ?= 1
 
 test-auto: _all fs
 	scripts/qemu-test.sh -a $(ARCH) -k build-$(LK_TESTPROJECT)/lk.elf -f $(BUILDDIR)/root.fat \
-		-l $(BUILDDIR)/test-auto.log -t $(TEST_TIMEOUT) -s $(TEST_SMP) $(TEST_APPS)
+		-l $(BUILDDIR)/test-auto.log -t $(TEST_TIMEOUT) -s $(TEST_SMP) $(foreach a,$(TEST_APPS),'$(a)')
 
 .PHONY: all _all apps fs lk clean clean-apps spotless newlib build-newlib configure-newlib clean-newlib list-toolchain test test-auto
 

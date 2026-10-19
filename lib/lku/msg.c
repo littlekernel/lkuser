@@ -361,6 +361,42 @@ lk_status_t lk_ns_rmdir(lk_handle_t ns, const char *path) {
     return ns_call(ns, &m, 0, path);
 }
 
+lk_status_t lk_ns_mount(lk_handle_t ns, const char *path, lk_handle_t ep) {
+    struct lk_msg m = {.op = LK_NS_MOUNT, .carry = &ep, .ncarry = 1};
+    return ns_call(ns, &m, 0, path);
+}
+
+lk_status_t lk_ns_unmount(lk_handle_t ns, const char *path, lk_handle_t ep) {
+    struct lk_msg m = {.op = LK_NS_UNMOUNT, .carry = &ep, .ncarry = 1, .carry_flags = LK_HANDLE_LEND(0)};
+    return ns_call(ns, &m, 0, path);
+}
+
+lk_status_t lk_ns_lookup(lk_handle_t ns, const char *path, lk_handle_t *conn, char *rest,
+                         size_t cap, size_t *rest_len) {
+    struct lk_ns_lookup_reply reply;
+    lk_handle_t h = LK_HANDLE_INVALID;
+    const struct lk_iov reply_iov[2] = {{&reply, sizeof(reply)}, {rest, cap ? cap - 1 : 0}};
+    struct lk_msg m = {
+        .op = LK_NS_LOOKUP, .reply = reply_iov, .nreply = 2, .handles = &h, .handles_max = 1,
+    };
+    lk_status_t err = ns_call(ns, &m, 0, path);
+    if (err < 0) {
+        return err;
+    }
+    // a lookup that succeeded hands over exactly one connection
+    if (m.nhandles != 1) {
+        return ERR_BAD_STATE;
+    }
+    *conn = h;
+    if (cap) {
+        rest[reply.rest_len] = '\0';
+    }
+    if (rest_len) {
+        *rest_len = reply.rest_len;
+    }
+    return NO_ERROR;
+}
+
 lk_status_t lk_file_read(lk_handle_t file, uint64_t off, void *buf, size_t len, size_t *nread) {
     if (len > UINT32_MAX) {
         len = UINT32_MAX;

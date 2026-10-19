@@ -7,21 +7,30 @@
  */
 #pragma once
 
+#include <kernel/wait.h>
 #include <lk/cpp.h>
 #include <lk/err.h>
+#include <lktl/list.h>
 #include <lktl/ref_ptr.h>
 #include <string.h>
 #include <sys/lk_msg.h>
 #include <sys/types.h>
 
+#include "impulse.h"
 #include "msg.h"
 #include "object.h"
 
 namespace lkuser {
 
+class connection;
+class group;
 class kcall;
 class proc;
 class thread;
+
+// the hooks of a group's member lists and of an endpoint's list of connections
+struct group_tag {};
+struct conn_tag {};
 
 // A kernel endpoint's handler: runs on the calling thread, in the caller's address space,
 // with interrupts enabled, and returns the service's status, which the reply header carries.
@@ -35,14 +44,16 @@ using kernel_handler_t = lk_status_t (*)(kcall &call);
 using kernel_release_t = void (*)(uint64_t cookie);
 
 // The receiving side of a service: a handler in the kernel, or the threads of a user server
-// receiving on it.
-class endpoint : public object {
+// receiving on it, directly or through a group.
+class endpoint : public object, public lk::list_hook<group_tag> {
 public:
     static constexpr obj_kind kKind = obj_kind::ENDPOINT;
 
     // name is static text, for the console; release_hook may be null
     static lk::ref_ptr<endpoint> create_kernel(const char *name, kernel_handler_t handler,
                                                kernel_release_t release_hook);
+    // a user server's, with LK_EP_FLAG_* flags; empty if out of memory
+    static lk::ref_ptr<endpoint> create_user(uint32_t flags, uint32_t max_active, uint64_t cookie);
 
     bool is_kernel() const { return handler_ != nullptr; }
     kernel_handler_t handler() const { return handler_; }
@@ -51,20 +62,41 @@ public:
     uint32_t flags() const { return flags_; }
     uint32_t max_active() const { return max_active_; }
     uint64_t cookie() const { return cookie_; }
+    uint32_t active_debug() const { return __atomic_load_n(&active, __ATOMIC_RELAXED); }
 
-    // Set when the last handle to the endpoint closes; calls over its connections then fail
-    // with ERR_CHANNEL_CLOSED. A kernel endpoint has no handles and never closes.
+    // Set when the last handle to a user endpoint closes: callers queued on it and threads
+    // blocked in recv on it get ERR_CHANNEL_CLOSED, queued impulses are dropped, it leaves its
+    // group, and its connections raise PEER_CLOSED; every later call or impulse over them fails
+    // with ERR_CHANNEL_CLOSED. Calls already received can still be replied to. A kernel endpoint
+    // has no handles and never closes.
     bool closed() const { return __atomic_load_n(&closed_, __ATOMIC_ACQUIRE); }
-    void close() { __atomic_store_n(&closed_, true, __ATOMIC_RELEASE); }
+    void close();
+
+    // A user endpoint's queues, under LKUSER_IPC_LOCK, worked by ipc.cpp, impulse.cpp and
+    // group.cpp. pending holds calls not yet received, impulses the impulses, and active counts
+    // the calls received and not yet ended, at most max_active.
+    bool closed_locked() const { return closed_; }
+    bool has_call_locked() const { return !pending.is_empty() && active < max_active_; }
+    bool has_work_locked() const { return !impulses.is_empty() || has_call_locked(); }
+    // after the queues or active changed: the READABLE signal, and the endpoint's place in its
+    // group's lists, at the back of the one it now belongs on
+    void changed_locked();
+    // wakes a thread blocked in recv on the endpoint, or failing that one on its group
+    void wake_receiver_locked();
+
+    lk::list<pending_call> pending;
+    lk::list<impulse_node> impulses;
+    wait_queue_t receivers;
+    lk::list<connection, lk::base_hook_traits<connection, conn_tag>> conns;
+    group *grp = nullptr;
+    uint32_t active = 0;
 
 private:
     friend class object;
 
     endpoint(const char *name, kernel_handler_t fn, kernel_release_t rel, uint32_t flags,
-             uint32_t max_active, uint64_t cookie)
-        : object(kKind), name_(name), handler_(fn), release_hook_(rel), flags_(flags),
-          max_active_(max_active), cookie_(cookie) {}
-    ~endpoint() = default;
+             uint32_t max_active, uint64_t cookie);
+    ~endpoint();
     DISALLOW_COPY_ASSIGN_AND_MOVE(endpoint);
 
     const char *const name_;
@@ -77,40 +109,48 @@ private:
 };
 
 // A client's way to an endpoint, made by connect, or by a kernel service with a cookie naming
-// its state for the connection (namespace.OPEN's open file).
-class connection : public object {
+// its state for the connection (namespace.OPEN's open file). One object with two views: the
+// client's handles, and with CONNECT_NOTIFY the server's peer handles (kRightPeerView), from
+// connection_accept, which set the cookie and the READABLE/WRITABLE/ERROR signals the client
+// waits on. The last client handle closing sends a user endpoint CONN_CLOSED with the cookie;
+// peer operations fail with ERR_CHANNEL_CLOSED from then on.
+class connection : public object, public lk::list_hook<conn_tag> {
 public:
     static constexpr obj_kind kKind = obj_kind::CONNECTION;
 
     endpoint *ep() const { return ep_.get(); }
-    uint64_t cookie() const { return cookie_; }
+    uint64_t cookie() const { return __atomic_load_n(&cookie_, __ATOMIC_RELAXED); }
+    uint32_t client_handles_debug() const { return __atomic_load_n(&client_handles_, __ATOMIC_RELAXED); }
+
+    // under LKUSER_IPC_LOCK
+    void set_cookie_locked(uint64_t cookie) { __atomic_store_n(&cookie_, cookie, __ATOMIC_RELAXED); }
+    bool client_closed_locked() const { return client_closed_; }
+
+    // a client view came or went (object::handle_added/handle_removed)
+    void client_handle_added() { __atomic_fetch_add(&client_handles_, 1, __ATOMIC_RELAXED); }
+    void client_handle_removed();
+    // The client side has gone, or a handshake the server accepted never reached the client:
+    // a user endpoint gets CONN_CLOSED. Once only.
+    void client_closed();
 
 private:
     friend class object;
 
-    explicit connection(lk::ref_ptr<endpoint> ep, uint64_t cookie = 0)
-        : object(kKind), ep_(std::move(ep)), cookie_(cookie) {}
+    explicit connection(lk::ref_ptr<endpoint> ep, uint64_t cookie = 0);
     // runs a kernel endpoint's release hook
     ~connection();
     DISALLOW_COPY_ASSIGN_AND_MOVE(connection);
 
     const lk::ref_ptr<endpoint> ep_;
     uint64_t cookie_;
+    uint32_t client_handles_ = 0;
+    // under LKUSER_IPC_LOCK
+    bool client_closed_ = false;
+    impulse_node closed_impulse_;
 };
 
 // A connection to ep installed in p's table with the default rights.
 status_t connect(proc *p, lk::ref_ptr<endpoint> ep, lk_handle_t *out);
-
-// A handle a request carries, as the service sees it. A moved handle (the default) stays in
-// the caller's table while the service runs and leaves it once the service returns success; a
-// lent one never leaves, and the service sees its rights without DUP and TRANSFER. A service
-// keeps a carried object only by reference or by putting it in a table, never a lent one.
-struct carried_handle {
-    lk_handle_t h; // in the caller's table
-    lk::ref_ptr<object> obj;
-    uint32_t rights;
-    bool lent;
-};
 
 // A call to a kernel endpoint as its handler sees it. The request header has been read and
 // checked before the handler runs, and the reply header is written after it returns, with the

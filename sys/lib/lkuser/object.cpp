@@ -12,6 +12,8 @@
 #include <stdio.h>
 
 #include "endpoint.h"
+#include "group.h"
+#include "handle.h"
 #include "memobj.h"
 #include "proc.h"
 #include "thread.h"
@@ -60,6 +62,9 @@ void object::destroy(object *o) {
         case obj_kind::CONNECTION:
             delete static_cast<connection *>(o);
             return;
+        case obj_kind::GROUP:
+            delete static_cast<group *>(o);
+            return;
         case obj_kind::MEMOBJ:
             delete static_cast<memobj *>(o);
             return;
@@ -74,11 +79,17 @@ void object::destroy(object *o) {
     }
 }
 
-void object::handle_added() {
+void object::handle_added(uint32_t rights) {
     __atomic_fetch_add(&handle_count_, 1, __ATOMIC_RELAXED);
+    if (kind() == obj_kind::CONNECTION && !(rights & kRightPeerView)) {
+        static_cast<connection *>(this)->client_handle_added();
+    }
 }
 
-void object::handle_removed() {
+void object::handle_removed(uint32_t rights) {
+    if (kind() == obj_kind::CONNECTION && !(rights & kRightPeerView)) {
+        static_cast<connection *>(this)->client_handle_removed();
+    }
     const uint32_t old = __atomic_fetch_add(&handle_count_, -1, __ATOMIC_ACQ_REL);
     DEBUG_ASSERT(old > 0);
     if (old == 1) {
@@ -86,21 +97,31 @@ void object::handle_removed() {
     }
 }
 
-void object::signal(uint32_t set) {
+void object::update_signals(uint32_t set, uint32_t clear) {
     LKUSER_IPC_LOCK(state);
-    signals_ |= set;
+    update_signals_locked(set, clear);
+    LKUSER_IPC_UNLOCK(state);
+}
+
+void object::update_signals_locked(uint32_t set, uint32_t clear) {
+    signals_ = (signals_ & ~clear) | set;
+    if (!set) {
+        return;
+    }
     for (wait_edge &e : waiters_) {
         if (signals_ & e.mask) {
             wait_queue_wake_all(e.wq, false, NO_ERROR);
         }
     }
-    LKUSER_IPC_UNLOCK(state);
 }
 
 void object::last_handle_removed(object *o) {
     switch (o->kind()) {
         case obj_kind::ENDPOINT:
             static_cast<endpoint *>(o)->close();
+            return;
+        case obj_kind::GROUP:
+            static_cast<group *>(o)->close();
             return;
         default:
             return;
@@ -131,15 +152,16 @@ void object::dump() const {
             if (ep->is_kernel()) {
                 printf(" kernel '%s'", ep->name());
             } else {
-                printf(" user flags %#x max_active %u cookie %#llx%s", ep->flags(),
-                       ep->max_active(), (unsigned long long)ep->cookie(),
+                printf(" user flags %#x active %u/%u cookie %#llx%s", ep->flags(),
+                       ep->active_debug(), ep->max_active(), (unsigned long long)ep->cookie(),
                        ep->closed() ? " closed" : "");
             }
             break;
         }
         case obj_kind::CONNECTION: {
             const auto *conn = static_cast<const connection *>(this);
-            printf(" to %p cookie %#llx", conn->ep(), (unsigned long long)conn->cookie());
+            printf(" to %p cookie %#llx clients %u", conn->ep(), (unsigned long long)conn->cookie(),
+                   conn->client_handles_debug());
             break;
         }
         case obj_kind::MEMOBJ: {

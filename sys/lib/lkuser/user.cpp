@@ -113,7 +113,7 @@ status_t resolve_fs_path(const char* path, char* out_path, size_t out_path_len) 
     return NO_ERROR;
 }
 
-status_t resolve_user_path(const char *path, size_t len, char *out) {
+status_t normalize_user_path(const char *path, size_t len, char *out) {
     if (len == 0) {
         return ERR_BAD_PATH;
     }
@@ -134,7 +134,19 @@ status_t resolve_user_path(const char *path, size_t len, char *out) {
     if (*p != '/') {
         *--p = '/';
     }
-    return resolve_fs_path(p, out, FS_MAX_PATH_LEN);
+    if (strlcpy(out, p, FS_MAX_PATH_LEN) >= FS_MAX_PATH_LEN) {
+        return ERR_TOO_BIG;
+    }
+    return NO_ERROR;
+}
+
+status_t resolve_user_path(const char *path, size_t len, char *out) {
+    char normalized[FS_MAX_PATH_LEN];
+    status_t err = normalize_user_path(path, len, normalized);
+    if (err < 0) {
+        return err;
+    }
+    return resolve_fs_path(normalized, out, FS_MAX_PATH_LEN);
 }
 
 namespace {
@@ -238,13 +250,19 @@ struct {
     vaddr_t entry;
 } loaded;
 
+// started by "lkuser start", until "lkuser wait" has seen them exit
+constexpr size_t kMaxBackground = 8;
+lk::ref_ptr<lkuser::proc> background[kMaxBackground];
+
 int cmd_lkuser(int argc, const console_cmd_args *argv) {
     if (argc < 2) {
 notenoughargs:
         printf("not enough arguments:\n");
 usage:
         printf("%s load <path to binary> [args...]\n", argv[0].str);
-        printf("%s run [&]\n", argv[0].str);
+        printf("%s run                start it, and wait for it to exit\n", argv[0].str);
+        printf("%s start              start it; lkuser wait waits for it\n", argv[0].str);
+        printf("%s wait               until every process started with start has exited\n", argv[0].str);
         printf("%s root <path>\n", argv[0].str);
         printf("%s objs [-f]          every object (-f: take no locks)\n", argv[0].str);
         printf("%s handles <pid> [-f] a process's handles\n", argv[0].str);
@@ -297,13 +315,13 @@ usage:
         }
 
         printf("lkuser root set to '%s'\n", lkuser::get_fs_root());
-    } else if (!strcmp(argv[1].str, "run")) {
+    } else if (!strcmp(argv[1].str, "run") || !strcmp(argv[1].str, "start")) {
+        // A trailing "&" never reaches here: the console strips it and runs the command on a
+        // thread of its own, where "run" still waits. "start" is how the shell goes on at once.
         if (!loaded.p) {
             printf("no loaded binary\n");
             return -1;
         }
-
-        const bool wait = !(argc > 2 && !strcmp(argv[2].str, "&"));
 
         // the reference keeps the process readable after it exits, until the wait is over
         lk::ref_ptr<lkuser::proc> p = std::move(loaded.p);
@@ -312,8 +330,25 @@ usage:
             printf("lkuser: starting process %u failed: %d\n", p->pid(), err);
             return err;
         }
-        if (wait) {
+        if (!strcmp(argv[1].str, "run")) {
             p->wait();
+            return 0;
+        }
+        for (auto &b : background) {
+            if (!b) {
+                b = std::move(p);
+                break;
+            }
+        }
+        if (p) {
+            printf("lkuser: process %u runs, but lkuser wait will not wait for it\n", p->pid());
+        }
+    } else if (!strcmp(argv[1].str, "wait")) {
+        for (auto &b : background) {
+            if (b) {
+                b->wait();
+                b.reset();
+            }
         }
     } else if (!strcmp(argv[1].str, "objs")) {
         const bool lock = !(argc > 2 && !strcmp(argv[2].str, "-f"));

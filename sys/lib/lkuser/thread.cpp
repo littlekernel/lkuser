@@ -38,7 +38,7 @@ uint32_t next_tid = 1;
 
 thread::thread(proc *p, vaddr_t entry, vaddr_t sp)
     : object(kKind), proc_(p), tid_(__atomic_fetch_add(&next_tid, 1, __ATOMIC_RELAXED)),
-      entry_(entry), sp_(sp) {
+      entry_(entry), sp_(sp), call_(this) {
     wait_queue_init(&wait_queue_);
 }
 

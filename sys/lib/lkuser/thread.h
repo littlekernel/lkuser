@@ -56,7 +56,8 @@ public:
     proc *process() const { return proc_.get(); }
     uint32_t tid() const { return tid_; }
 
-    // the call this thread has in progress; only the thread itself touches it
+    // the call this thread has in progress; only the thread itself touches it, apart from a
+    // user server working on it (pending_call's locking)
     pending_call &call() { return call_; }
 
     // the queue it blocks on in wait()

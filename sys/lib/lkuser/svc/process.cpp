@@ -13,6 +13,7 @@
 #include <string.h>
 #include <sys/svc/process.h>
 
+#include "../endpoint.h"
 #include "../proc.h"
 #include "../thread.h"
 #include "../user.h"
@@ -153,8 +154,11 @@ lk_status_t process_spawn(kcall &c) {
         return ERR_NOT_ENOUGH_BUFFER;
     }
 
-    // the child's startup handles: moved, never lent, since a lent one ends with this call
+    // the child's startup handles: moved, never lent, since a lent one ends with this call;
+    // and perhaps the connection its exit is told over, which the kernel keeps
     startup_handle extra[LK_MSG_MAX_HANDLES];
+    size_t nextra = 0;
+    const carried_handle *notify = nullptr;
     for (size_t i = 0; i < c.nhandles(); i++) {
         const carried_handle &h = c.handle(i);
         if (h.lent || req.tags[i] == 0) {
@@ -165,7 +169,19 @@ lk_status_t process_spawn(kcall &c) {
                 return ERR_INVALID_ARGS;
             }
         }
-        extra[i] = {req.tags[i], h.obj, h.rights};
+        if (req.tags[i] == LK_PROCESS_SPAWN_TAG_EXIT_NOTIFY) {
+            lk::ref_ptr<connection> conn;
+            lk_status_t err = c.handle_as(i, LK_RIGHT_IMPULSE, &conn);
+            if (err < 0) {
+                return err;
+            }
+            if (conn->ep()->is_kernel()) {
+                return ERR_NOT_SUPPORTED;
+            }
+            notify = &h;
+            continue;
+        }
+        extra[nextra++] = {req.tags[i], h.obj, h.rights};
     }
     for (size_t i = c.nhandles(); i < LK_MSG_MAX_HANDLES; i++) {
         if (req.tags[i] != 0) {
@@ -200,10 +216,13 @@ lk_status_t process_spawn(kcall &c) {
     }
 
     lk::ref_ptr<proc> child;
-    err = proc::create(req.nargs, argv, req.flags & LK_PROCESS_SPAWN_SERVICES, extra,
-                       c.nhandles(), &child);
+    err = proc::create(req.nargs, argv, req.flags & LK_PROCESS_SPAWN_SERVICES, extra, nextra,
+                       &child);
     if (err < 0) {
         return err;
+    }
+    if (notify) {
+        child->set_exit_notify(notify->obj, notify->rights);
     }
     vaddr_t entry;
     err = load_image(child.get(), path, &entry);

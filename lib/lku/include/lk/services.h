@@ -71,6 +71,14 @@ lk_status_t lk_ns_stat(lk_handle_t ns, const char *path, struct lk_file_stat *st
 lk_status_t lk_ns_mkdir(lk_handle_t ns, const char *path);
 lk_status_t lk_ns_unlink(lk_handle_t ns, const char *path);
 lk_status_t lk_ns_rmdir(lk_handle_t ns, const char *path);
+// path is served by the endpoint ep names (moved: a spare CONNECT handle)
+lk_status_t lk_ns_mount(lk_handle_t ns, const char *path, lk_handle_t ep);
+// the mount at path goes; ep (lent) names its endpoint
+lk_status_t lk_ns_unmount(lk_handle_t ns, const char *path, lk_handle_t ep);
+// *conn: a new connection to the server mounted over path; rest[cap] gets the rest of the
+// path below its mount point, NUL-terminated (the service refuses a rest longer than cap - 1)
+lk_status_t lk_ns_lookup(lk_handle_t ns, const char *path, lk_handle_t *conn, char *rest,
+                         size_t cap, size_t *rest_len);
 
 // Positional: nothing keeps an offset. A length past 32 bits is cut short.
 lk_status_t lk_file_read(lk_handle_t file, uint64_t off, void *buf, size_t len, size_t *nread);

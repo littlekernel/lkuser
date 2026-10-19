@@ -10,22 +10,130 @@
 #include <stddef.h>
 #include <string.h>
 
+#include "group.h"
 #include "handle.h"
+#include "ipc.h"
 #include "proc.h"
 #include "syscalls.h"
 #include "thread.h"
 
 namespace lkuser {
 
+endpoint::endpoint(const char *name, kernel_handler_t fn, kernel_release_t rel, uint32_t flags,
+                   uint32_t max_active, uint64_t cookie)
+    : object(kKind), name_(name), handler_(fn), release_hook_(rel), flags_(flags),
+      max_active_(max_active), cookie_(cookie) {
+    wait_queue_init(&receivers);
+}
+
+endpoint::~endpoint() {
+    // queued calls and impulses hold references that keep the endpoint alive, and so does
+    // every connection
+    DEBUG_ASSERT(pending.is_empty() && impulses.is_empty() && conns.is_empty() && !grp);
+    THREAD_LOCK(state);
+    wait_queue_destroy(&receivers, false);
+    THREAD_UNLOCK(state);
+}
+
 lk::ref_ptr<endpoint> endpoint::create_kernel(const char *name, kernel_handler_t handler,
                                               kernel_release_t release_hook) {
     return object::make<endpoint>(name, handler, release_hook, 0u, 1u, uint64_t{0});
 }
 
-connection::~connection() {
-    if (ep_->release_hook()) {
-        ep_->release_hook()(cookie_);
+lk::ref_ptr<endpoint> endpoint::create_user(uint32_t flags, uint32_t max_active, uint64_t cookie) {
+    return object::make<endpoint>(nullptr, nullptr, nullptr, flags, max_active, cookie);
+}
+
+void endpoint::changed_locked() {
+    const uint32_t readable =
+        (!impulses.is_empty() || !pending.is_empty()) ? LK_SIGNAL_READABLE : 0;
+    update_signals_locked(readable, LK_SIGNAL_READABLE & ~readable);
+    if (grp) {
+        grp->place_locked(this);
     }
+}
+
+void endpoint::wake_receiver_locked() {
+    if (wait_queue_wake_one(&receivers, false, NO_ERROR) == 0 && grp) {
+        wait_queue_wake_one(&grp->receivers, false, NO_ERROR);
+    }
+}
+
+void endpoint::close() {
+    if (is_kernel()) {
+        return;
+    }
+    lk::list<impulse_node> dropped;
+    {
+        LKUSER_IPC_LOCK(state);
+        __atomic_store_n(&closed_, true, __ATOMIC_RELEASE);
+        while (pending_call *pc = pending.pop_front()) {
+            pc->state = call_state::DONE;
+            pc->result = ERR_CHANNEL_CLOSED;
+            wait_queue_wake_one(&pc->done, false, NO_ERROR);
+        }
+        while (impulse_node *n = impulses.pop_front()) {
+            dropped.push_back(n);
+        }
+        if (grp) {
+            grp->remove_locked(this);
+        }
+        wait_queue_wake_all(&receivers, false, ERR_CHANNEL_CLOSED);
+        for (connection &c : conns) {
+            c.update_signals_locked(LK_SIGNAL_PEER_CLOSED, 0);
+        }
+        changed_locked();
+        LKUSER_IPC_UNLOCK(state);
+    }
+    while (impulse_node *n = dropped.pop_front()) {
+        release_impulse(n);
+    }
+}
+
+connection::connection(lk::ref_ptr<endpoint> ep, uint64_t cookie)
+    : object(kKind), ep_(std::move(ep)), cookie_(cookie) {
+    if (ep_->is_kernel()) {
+        return;
+    }
+    LKUSER_IPC_LOCK(state);
+    ep_->conns.push_back(this);
+    if (ep_->closed_locked()) {
+        update_signals_locked(LK_SIGNAL_PEER_CLOSED, 0);
+    }
+    LKUSER_IPC_UNLOCK(state);
+}
+
+connection::~connection() {
+    if (ep_->is_kernel()) {
+        if (ep_->release_hook()) {
+            ep_->release_hook()(cookie_);
+        }
+        return;
+    }
+    LKUSER_IPC_LOCK(state);
+    ep_->conns.remove(this);
+    LKUSER_IPC_UNLOCK(state);
+}
+
+void connection::client_handle_removed() {
+    if (__atomic_fetch_add(&client_handles_, -1, __ATOMIC_ACQ_REL) == 1) {
+        client_closed();
+    }
+}
+
+void connection::client_closed() {
+    if (ep_->is_kernel()) {
+        return;
+    }
+    LKUSER_IPC_LOCK(state);
+    if (!client_closed_) {
+        client_closed_ = true;
+        closed_impulse_.imp = {
+            .type = LK_IMPULSE_CONN_CLOSED, .flags = 0, .cookie = cookie(), .payload = {}};
+        // a closed endpoint has nobody to tell
+        queue_impulse_locked(ep_.get(), &closed_impulse_, this);
+    }
+    LKUSER_IPC_UNLOCK(state);
 }
 
 status_t connect(proc *p, lk::ref_ptr<endpoint> ep, lk_handle_t *out) {
@@ -84,6 +192,16 @@ void drop_reply_handles(proc *p, pending_call &pc) {
     pc.nreply_handles = 0;
 }
 
+// Whether the reply gives the caller h.
+bool gives_back(const pending_call &pc, lk_handle_t h) {
+    for (size_t i = 0; i < pc.nreply_handles; i++) {
+        if (pc.reply_handles[i].h == h) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // The handles a request carries, looked up in p's table: ERR_FAULT for an unreadable array,
 // ERR_BAD_HANDLE for no such handle, ERR_ACCESS_DENIED for a moved one without TRANSFER, and
 // ERR_INVALID_ARGS for a handle moved and named again in the same request.
@@ -134,7 +252,8 @@ status_t call_kernel(thread *t, const connection &conn, pending_call &pc, const 
     }
     if (status >= 0) {
         for (size_t i = 0; i < nhandles; i++) {
-            if (!handles[i].lent) {
+            // a slot the caller's other thread closed may now hold a handle of the reply
+            if (!handles[i].lent && !gives_back(pc, handles[i].h)) {
                 t->process()->handles().close_if(handles[i].h, handles[i].obj.get());
             }
         }
@@ -163,7 +282,9 @@ status_t call_kernel(thread *t, const connection &conn, pending_call &pc, const 
 
 // The transport checks every request before a service sees it: a header that fits, a reply
 // buffer that can take one, an op the client may send and a length that matches the iovecs.
-// Its status says whether a reply arrived; the service's verdict is in the reply header.
+// Its status says whether a reply arrived; the service's verdict is in the reply header. A
+// kernel endpoint's handler runs here; a user endpoint's server receives the call on its own
+// thread while this one waits.
 status_t sys_call(lk_handle_t conn_h, user_ptr<lk_call_args> uargs) {
     thread *t = thread::current();
     proc *p = t->process();
@@ -183,10 +304,6 @@ status_t sys_call(lk_handle_t conn_h, user_ptr<lk_call_args> uargs) {
     endpoint *ep = conn->ep();
     if (ep->closed()) {
         return ERR_CHANNEL_CLOSED;
-    }
-    // a user endpoint is served by recv, which no thread can call yet
-    if (!ep->is_kernel()) {
-        return ERR_NOT_SUPPORTED;
     }
     if (args.nhandles > LK_MSG_MAX_HANDLES || args.reply_nhandles > LK_MSG_MAX_HANDLES ||
         (args.handle_flags & ~((1u << args.nhandles) - 1))) {
@@ -242,7 +359,11 @@ status_t sys_call(lk_handle_t conn_h, user_ptr<lk_call_args> uargs) {
     }
     pc.reply_handles_cap = args.reply_nhandles;
 
-    err = call_kernel(t, *conn, pc, hdr, carried, args.nhandles);
+    if (ep->is_kernel()) {
+        err = call_kernel(t, *conn, pc, hdr, carried, args.nhandles);
+    } else {
+        err = call_user(t, std::move(conn), hdr, carried, args.nhandles, args.timeout_ns);
+    }
     if (err < 0) {
         return err;
     }
@@ -272,41 +393,84 @@ status_t sys_endpoint_create(user_ptr<const lk_endpoint_args> uargs, user_ptr<lk
     if ((args.flags & ~LK_EP_FLAG_CONNECT_NOTIFY) || args.max_active == 0) {
         return ERR_INVALID_ARGS;
     }
-    // the handshake is a call the server receives, so it waits for recv
-    if (args.flags & LK_EP_FLAG_CONNECT_NOTIFY) {
-        return ERR_NOT_SUPPORTED;
-    }
 
-    lk::ref_ptr<endpoint> ep = object::make<endpoint>(nullptr, nullptr, nullptr, args.flags,
-                                                      args.max_active, args.cookie);
+    lk::ref_ptr<endpoint> ep = endpoint::create_user(args.flags, args.max_active, args.cookie);
     if (!ep) {
         return ERR_NO_MEMORY;
     }
     return p->handles().add_for_user(p->aspace(), std::move(ep), kEndpointRights, out);
 }
 
+// With CONNECT_NOTIFY, connect is a call the server accepts or refuses, and the client's handle
+// is made only once it has accepted.
 status_t sys_connect(lk_handle_t ep_h, user_ptr<lk_handle_t> out) {
-    proc *p = thread::current()->process();
+    thread *t = thread::current();
+    proc *p = t->process();
 
     lk::ref_ptr<endpoint> ep;
     status_t err = p->handles().get(ep_h, LK_RIGHT_CONNECT, &ep);
     if (err < 0) {
         return err;
     }
+    if (ep->closed()) {
+        return ERR_CHANNEL_CLOSED;
+    }
+    const bool notify = ep->flags() & LK_EP_FLAG_CONNECT_NOTIFY;
     lk::ref_ptr<connection> conn = object::make<connection>(std::move(ep));
     if (!conn) {
         return ERR_NO_MEMORY;
     }
-    return p->handles().add_for_user(p->aspace(), std::move(conn), kConnectionRights, out);
+    if (notify) {
+        err = connect_notify(t, conn);
+        if (err < 0) {
+            return err;
+        }
+    }
+    lk::ref_ptr<connection> keep = conn;
+    err = p->handles().add_for_user(p->aspace(), std::move(conn), kConnectionRights, out);
+    // the server accepted a connection the client never got
+    if (err < 0 && notify) {
+        keep->client_closed();
+    }
+    return err;
 }
 
-// Tokens come only from recv, which no thread can call yet, so none names a live call.
-status_t sys_msg_read(lk_token_t, size_t, user_ptr<const lk_iov>, size_t) {
-    return ERR_NOT_FOUND;
+// The server's side of a CONNECT_NOTIFY connection, through a peer handle.
+status_t sys_connection_set_cookie(lk_handle_t peer_h, uintptr_t cookie) {
+    proc *p = thread::current()->process();
+    lk::ref_ptr<connection> conn;
+    status_t err = p->handles().get(peer_h, LK_RIGHT_SIGNAL, &conn);
+    if (err < 0) {
+        return err;
+    }
+    LKUSER_IPC_LOCK(state);
+    if (conn->client_closed_locked()) {
+        err = ERR_CHANNEL_CLOSED;
+    } else {
+        conn->set_cookie_locked(cookie);
+    }
+    LKUSER_IPC_UNLOCK(state);
+    return err;
 }
 
-status_t sys_msg_write(lk_token_t, size_t, user_ptr<const lk_iov>, size_t) {
-    return ERR_NOT_FOUND;
+status_t sys_connection_signal(lk_handle_t peer_h, uint32_t set, uint32_t clear) {
+    if ((set | clear) & ~LK_SIGNAL_CONN_SERVER) {
+        return ERR_INVALID_ARGS;
+    }
+    proc *p = thread::current()->process();
+    lk::ref_ptr<connection> conn;
+    status_t err = p->handles().get(peer_h, LK_RIGHT_SIGNAL, &conn);
+    if (err < 0) {
+        return err;
+    }
+    LKUSER_IPC_LOCK(state);
+    if (conn->client_closed_locked()) {
+        err = ERR_CHANNEL_CLOSED;
+    } else {
+        conn->update_signals_locked(set, clear);
+    }
+    LKUSER_IPC_UNLOCK(state);
+    return err;
 }
 
 } // namespace lkuser

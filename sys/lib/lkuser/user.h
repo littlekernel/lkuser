@@ -18,6 +18,11 @@ class proc;
 // The caller normalizes path first if ".." must not climb out of the root.
 status_t resolve_fs_path(const char *path, char *out_path, size_t out_path_len);
 
+// The len bytes at path, a path a process sent, absolute and normalized into out, which holds
+// FS_MAX_PATH_LEN bytes: ".." stops at "/". ERR_BAD_PATH for an empty or relative path or one
+// holding a NUL, ERR_TOO_BIG for one that does not fit.
+status_t normalize_user_path(const char *path, size_t len, char *out);
+
 // The len bytes at path, a path a process sent, in the kernel's tree, out holding
 // FS_MAX_PATH_LEN bytes. It is normalized before the root goes in front of it, so ".." cannot
 // climb out of the root. ERR_BAD_PATH for an empty or relative path or one holding a NUL,

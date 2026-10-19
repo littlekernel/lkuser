@@ -68,6 +68,10 @@ struct proc::mapping : lk::list_hook<> {
 
 proc::proc(uint32_t pid) : object(kKind), pid_(pid) {
     event_init(&exit_event_, false, 0);
+    for (impulse_node &n : impulse_pool) {
+        n.pool = this;
+        free_impulses.push_back(&n);
+    }
 }
 
 proc::~proc() {
@@ -76,6 +80,12 @@ proc::~proc() {
     drop_mappings();
     free(args_);
     event_destroy(&exit_event_);
+    // a queued impulse holds a reference to its pool's process, so every one is back
+    free_impulses.clear();
+    // never started, so never notified
+    if (exit_notify_) {
+        exit_notify_->handle_removed(exit_notify_rights_);
+    }
 }
 
 status_t proc::create(int argc, const char *const *argv, bool services,
@@ -211,6 +221,10 @@ status_t proc::start(vaddr_t entry) {
     }
     {
         AutoLock guard(lock_);
+        // a kill since the check above has closed the handle table
+        if (state_ != state::CREATED) {
+            return ERR_BAD_STATE;
+        }
         err = t->create_lk_thread();
         if (err < 0) {
             return err;
@@ -266,10 +280,42 @@ void proc::exit(int code) {
         }
     }
 
-    handles_.close_all();
+    // before the handles go, so anyone who sees the endpoints close has the line too
     printf("lkuser: process %u (%s) exited with code %d\n", pid_, name_, code);
+    cancel_inflight(this);
+    handles_.close_all();
     event_signal(&exit_event_, true);
     event_signal(&reap_event, true);
+}
+
+void proc::set_exit_notify(lk::ref_ptr<object> conn, uint32_t rights) {
+    DEBUG_ASSERT(!exit_notify_);
+    conn->handle_added(rights);
+    exit_notify_ = std::move(conn);
+    exit_notify_rights_ = rights;
+}
+
+// The PROCESS_EXITED impulse, then the held handle goes, which may be the connection's last
+// client view and send CONN_CLOSED behind it.
+void proc::notify_exit() {
+    if (!exit_notify_) {
+        return;
+    }
+    auto *conn = static_cast<connection *>(exit_notify_.get());
+    int code = 0;
+    exited(&code);
+    lk_impulse_process_exited payload = {.pid = pid_, .exit_code = code, .reserved = {}};
+    {
+        LKUSER_IPC_LOCK(lock_state);
+        exit_impulse_.imp = {
+            .type = LK_IMPULSE_PROCESS_EXITED, .flags = 0, .cookie = conn->cookie(), .payload = {}};
+        memcpy(exit_impulse_.imp.payload, &payload, sizeof(payload));
+        // a closed endpoint has nobody to tell
+        queue_impulse_locked(conn->ep(), &exit_impulse_, this);
+        LKUSER_IPC_UNLOCK(lock_state);
+    }
+    lk::ref_ptr<object> held = std::move(exit_notify_);
+    held->handle_removed(exit_notify_rights_);
 }
 
 bool proc::thread_exiting() {
@@ -381,6 +427,7 @@ void proc::reap_exited() {
 
         found->teardown();
         found->signal(LK_SIGNAL_TERMINATED);
+        found->notify_exit();
         // proc_list's reference
         found->release();
     }

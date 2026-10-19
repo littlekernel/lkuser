@@ -23,12 +23,19 @@
 
 namespace lkuser {
 
+// Not a right: marks a connection handle as the server's peer view, which no attenuation
+// removes, so that the client views can be counted (the last one closing is CONN_CLOSED).
+// handle_dup and every transfer keep it; user space never sees it.
+constexpr uint32_t kRightPeerView = 1u << 31;
+
 // The rights a handle gets from the call that creates its object, the only source of full
 // rights.
 constexpr uint32_t kEndpointRights =
     LK_RIGHT_RECV | LK_RIGHT_CONNECT | LK_RIGHT_WAIT | LK_RIGHT_DUP | LK_RIGHT_TRANSFER;
 constexpr uint32_t kConnectionRights =
     LK_RIGHT_CALL | LK_RIGHT_IMPULSE | LK_RIGHT_WAIT | LK_RIGHT_DUP | LK_RIGHT_TRANSFER;
+constexpr uint32_t kPeerRights = LK_RIGHT_SIGNAL | LK_RIGHT_DUP | LK_RIGHT_TRANSFER | kRightPeerView;
+constexpr uint32_t kGroupRights = LK_RIGHT_RECV | LK_RIGHT_DUP | LK_RIGHT_TRANSFER;
 
 // A process's handles: slots of {object, rights}. Handle h is slot h - 1, so 0 is never a
 // handle, and a new handle takes the lowest free slot. No object is released with the mutex
@@ -78,6 +85,10 @@ public:
     // A second handle to h's object with h's rights & mask. Needs DUP; the rights can only
     // shrink.
     status_t dup(lk_handle_t h, uint32_t mask, lk_handle_t *out);
+
+    // Whether a slot is free just now. Another thread may take it before the caller does, so
+    // this only lets a service refuse early what add() would refuse later.
+    bool has_free_slot();
 
     // Closes every handle and refuses new ones. A process's table closes when it exits.
     void close_all();

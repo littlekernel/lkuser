@@ -20,6 +20,11 @@
 //   thread_fault    a second thread sleeps a minute; the first faults
 //   spin            a second thread spins in user mode; the first exits with 3
 //   last_thread     the first thread leaves by thread_exit, the second a little later: 0
+//   call            calls the connection under LK_TAG_USER_BASE and waits, to be killed
+//   serve           receives one call on the endpoint under LK_TAG_USER_BASE, then exits 4
+//                   without replying
+//   connect         connects to the endpoint under LK_TAG_USER_BASE, then exits 6, closing the
+//                   connection
 
 #define TEST_NAME "CHILD"
 #include <lk/services.h>
@@ -141,6 +146,25 @@ void _start_c(const struct lk_proc_args *args) {
     if (test_streq(mode, "last_thread")) {
         start_thread(sleep_then_leave);
         lk_thread_exit();
+    }
+    const lk_handle_t given = lk_proc_args_find(args, LK_TAG_USER_BASE);
+    if (test_streq(mode, "call")) {
+        lk_msg_call(given, 1, NULL, 0, NULL, 0, NULL);
+        fail("the call ended");
+    }
+    if (test_streq(mode, "serve")) {
+        struct lk_recv_args r = {.timeout_ns = LK_TIME_INFINITE};
+        if (lk_recv(given, &r) != NO_ERROR || r.info.token == 0) {
+            fail("recv");
+        }
+        lk_exit(4);
+    }
+    if (test_streq(mode, "connect")) {
+        lk_handle_t conn;
+        if (lk_connect(given, &conn) != NO_ERROR) {
+            fail("connect");
+        }
+        lk_exit(6);
     }
     fail(mode);
 }

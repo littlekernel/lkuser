@@ -13,10 +13,12 @@
 # upper-cased) if that code is 0. The console log and the scratch image are kept for
 # inspection.
 #
-# Each app is name[:arg...][=code]: /bin/<name> runs with the arguments after it, so
+# Each app is name[:arg...][&][=code]: /bin/<name> runs with the arguments after it, so
 # "rawtest:a:b:c" runs "lkuser load /bin/rawtest a b c", and is expected to exit with code
 # (default 0), as "lkuser: process <pid> (<name>) exited with code <code>" reports it. Lines for
-# processes the apps start themselves, under other names, are not counted.
+# processes the apps start themselves, under other names, are not counted. With "&" the app runs
+# in the background ("lkuser start") while the ones after it run, and "lkuser wait" waits for
+# every such app before the image is unmounted, so a server must end on its own.
 #
 # usage: qemu-test.sh -a <arch> -k <lk.elf> -f <root.fat> -l <log> [-t <secs>] [-s <smp>] app...
 
@@ -30,7 +32,7 @@ timeout_secs=60
 smp=1
 
 usage() {
-    echo "usage: $0 -a <arch> -k <lk.elf> -f <root.fat> -l <log> [-t <secs>] [-s <smp>] name[:arg...][=code]..." >&2
+    echo "usage: $0 -a <arch> -k <lk.elf> -f <root.fat> -l <log> [-t <secs>] [-s <smp>] name[:arg...][&][=code]..." >&2
     exit 2
 }
 
@@ -50,6 +52,8 @@ apps=("$@")
 specs=()
 names=()
 codes=()
+backgrounds=()
+any_background=0
 for app in "${apps[@]}"; do
     spec=${app%%=*}
     code=0
@@ -60,9 +64,16 @@ for app in "${apps[@]}"; do
         echo "$0: '$app': the expected exit code must be a number" >&2
         exit 2
     fi
+    background=0
+    if [[ $spec == *'&' ]]; then
+        spec=${spec%'&'}
+        background=1
+        any_background=1
+    fi
     specs+=("$spec")
     names+=("${spec%%:*}")
     codes+=("$code")
+    backgrounds+=("$background")
 done
 
 if [ -z "$arch" ] || [ -z "$kernel" ] || [ -z "$fsimage" ] || [ -z "$log" ] || [ ${#apps[@]} -eq 0 ]; then
@@ -88,14 +99,21 @@ done
 
 # '+' is a space to lib/cmdline; a literal space would end the argument
 autorun="mount+/fs+fat+virtio0;lkuser+root+/fs;"
-for spec in "${specs[@]}"; do
-    IFS=: read -r -a parts <<<"$spec"
+for i in "${!specs[@]}"; do
+    IFS=: read -r -a parts <<<"${specs[$i]}"
     load="lkuser+load+/bin/${parts[0]}"
     for arg in "${parts[@]:1}"; do
         load+="+$arg"
     done
-    autorun+="$load;lkuser+run;"
+    if [ "${backgrounds[$i]}" = 1 ]; then
+        autorun+="$load;lkuser+start;"
+    else
+        autorun+="$load;lkuser+run;"
+    fi
 done
+if [ $any_background = 1 ]; then
+    autorun+="lkuser+wait;"
+fi
 # unmounted so the scratch image is left clean for mtools and fsck.fat
 autorun+="unmount+/fs;poweroff"
 if [ ${#autorun} -gt 511 ]; then
