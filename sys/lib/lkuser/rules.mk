@@ -9,6 +9,25 @@ GLOBAL_INCLUDES += $(LOCAL_DIR)/include
 # file, which has none: its connections come from namespace.OPEN)
 LKUSER_SERVICES ?= console process time vm namespace file
 
+# Processes started at boot, before the shell, in order: path[:arg...][@service] each, the path
+# on the LKUSER_BOOT_FS file system on LKUSER_BOOT_DEV, which is mounted read-only while they
+# load and unmounted before any starts. With @service the process serves that service in the
+# kernel's place: it is born with an endpoint under LK_TAG_SERVE_ENDPOINT, and every process made
+# after it is born connected to that endpoint under the service's tag.
+LKUSER_BOOT ?=
+LKUSER_BOOT_FS ?= fat
+LKUSER_BOOT_DEV ?= virtio0
+
+# slots in each process's handle table
+LKUSER_HANDLES ?= 64
+
+# the defines cannot hold spaces, so the list is comma separated
+MODULE_DEFINES += LKUSER_BOOT=\"$(subst $(SPACE),$(COMMA),$(strip $(LKUSER_BOOT)))\"
+MODULE_DEFINES += LKUSER_BOOT_FS=\"$(LKUSER_BOOT_FS)\"
+MODULE_DEFINES += LKUSER_BOOT_DEV=\"$(LKUSER_BOOT_DEV)\"
+MODULE_DEFINES += LKUSER_HANDLES=$(LKUSER_HANDLES)
+
+MODULE_SRCS += $(LOCAL_DIR)/boot.cpp
 MODULE_SRCS += $(LOCAL_DIR)/copy.cpp
 MODULE_SRCS += $(LOCAL_DIR)/endpoint.cpp
 MODULE_SRCS += $(LOCAL_DIR)/group.cpp

@@ -7,6 +7,7 @@
  */
 #pragma once
 
+#include <lktl/ref_ptr.h>
 #include <sys/types.h>
 
 namespace lkuser {
@@ -33,5 +34,12 @@ status_t resolve_user_path(const char *path, size_t len, char *out);
 // its entry point. Runs on any thread: the image is written with p's address space borrowed
 // and the caller's put back.
 status_t load_image(proc *p, const char *path, vaddr_t *entry);
+
+// The processes "lkuser wait" waits for: those "lkuser start" started, and the boot processes.
+// False if there is no room (8).
+bool add_background(lk::ref_ptr<proc> p);
+
+// Waits until every process on the background list has exited, and empties it.
+void wait_background();
 
 } // namespace lkuser

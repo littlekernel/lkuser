@@ -20,7 +20,12 @@
 # in the background ("lkuser start") while the ones after it run, and "lkuser wait" waits for
 # every such app before the image is unmounted, so a server must end on its own.
 #
-# usage: qemu-test.sh -a <arch> -k <lk.elf> -f <root.fat> -l <log> [-t <secs>] [-s <smp>] app...
+# Each -b name[=code] is a process the kernel starts at boot (LKUSER_BOOT), checked the same way
+# but not loaded; "lkuser wait" waits for it too, so it must end on its own, after the apps
+# (a server is told to quit by the last app). With no apps the image is not mounted at all.
+#
+# usage: qemu-test.sh -a <arch> -k <lk.elf> -f <root.fat> -l <log> [-t <secs>] [-s <smp>]
+#                     [-b name[=code]]... app...
 
 set -u
 
@@ -30,13 +35,14 @@ fsimage=
 log=
 timeout_secs=60
 smp=1
+boots=()
 
 usage() {
-    echo "usage: $0 -a <arch> -k <lk.elf> -f <root.fat> -l <log> [-t <secs>] [-s <smp>] name[:arg...][&][=code]..." >&2
+    echo "usage: $0 -a <arch> -k <lk.elf> -f <root.fat> -l <log> [-t <secs>] [-s <smp>] [-b name[=code]]... name[:arg...][&][=code]..." >&2
     exit 2
 }
 
-while getopts "a:k:f:l:t:s:" opt; do
+while getopts "a:k:f:l:t:s:b:" opt; do
     case $opt in
         a) arch=$OPTARG ;;
         k) kernel=$OPTARG ;;
@@ -44,6 +50,7 @@ while getopts "a:k:f:l:t:s:" opt; do
         l) log=$OPTARG ;;
         t) timeout_secs=$OPTARG ;;
         s) smp=$OPTARG ;;
+        b) boots+=("$OPTARG") ;;
         *) usage ;;
     esac
 done
@@ -75,8 +82,23 @@ for app in "${apps[@]}"; do
     codes+=("$code")
     backgrounds+=("$background")
 done
+# boot processes are checked as apps are, after them in the lists
+for boot in "${boots[@]}"; do
+    name=${boot%%=*}
+    code=0
+    if [[ $boot == *=* ]]; then
+        code=${boot#*=}
+    fi
+    if ! [[ $code =~ ^-?[0-9]+$ ]] || ! [[ $name =~ ^[A-Za-z0-9_.-]+$ ]]; then
+        echo "$0: '-b $boot': expected name[=code]" >&2
+        exit 2
+    fi
+    names+=("$name")
+    codes+=("$code")
+done
 
-if [ -z "$arch" ] || [ -z "$kernel" ] || [ -z "$fsimage" ] || [ -z "$log" ] || [ ${#apps[@]} -eq 0 ]; then
+if [ -z "$arch" ] || [ -z "$kernel" ] || [ -z "$fsimage" ] || [ -z "$log" ] ||
+    [ $((${#apps[@]} + ${#boots[@]})) -eq 0 ]; then
     usage
 fi
 
@@ -98,7 +120,10 @@ for f in "$kernel" "$fsimage"; do
 done
 
 # '+' is a space to lib/cmdline; a literal space would end the argument
-autorun="mount+/fs+fat+virtio0;lkuser+root+/fs;"
+autorun=
+if [ ${#specs[@]} -gt 0 ]; then
+    autorun+="mount+/fs+fat+virtio0;lkuser+root+/fs;"
+fi
 for i in "${!specs[@]}"; do
     IFS=: read -r -a parts <<<"${specs[$i]}"
     load="lkuser+load+/bin/${parts[0]}"
@@ -111,11 +136,14 @@ for i in "${!specs[@]}"; do
         autorun+="$load;lkuser+run;"
     fi
 done
-if [ $any_background = 1 ]; then
+if [ $any_background = 1 ] || [ ${#boots[@]} -gt 0 ]; then
     autorun+="lkuser+wait;"
 fi
 # unmounted so the scratch image is left clean for mtools and fsck.fat
-autorun+="unmount+/fs;poweroff"
+if [ ${#specs[@]} -gt 0 ]; then
+    autorun+="unmount+/fs;"
+fi
+autorun+="poweroff"
 if [ ${#autorun} -gt 511 ]; then
     echo "$0: lk.autorun script is ${#autorun} bytes, over the 511 byte limit" >&2
     exit 2
@@ -124,7 +152,7 @@ fi
 mkdir -p "$(dirname "$log")"
 scratch_fs="${log%.log}.fat"
 cp -- "$fsimage" "$scratch_fs" || exit 2
-echo "qemu-test: arch $arch, smp $smp, timeout ${timeout_secs}s, apps: ${apps[*]}"
+echo "qemu-test: arch $arch, smp $smp, timeout ${timeout_secs}s, apps: ${apps[*]}${boots:+, boot: ${boots[*]}}"
 
 timeout --foreground "$timeout_secs" "${qemu[@]}" -m 512 -smp "$smp" -nographic \
     -kernel "$kernel" \

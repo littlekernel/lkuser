@@ -22,6 +22,7 @@
  */
 // The ELF loader and the console's lkuser command.
 
+#include <kernel/mutex.h>
 #include <kernel/vm.h>
 #include <lib/elf.h>
 #include <lib/fs.h>
@@ -237,6 +238,38 @@ status_t load_image(proc *p, const char *path, vaddr_t *entry) {
     return NO_ERROR;
 }
 
+namespace {
+
+constexpr size_t kMaxBackground = 8;
+lk::ref_ptr<proc> background[kMaxBackground];
+Mutex background_lock;
+
+} // namespace
+
+bool add_background(lk::ref_ptr<proc> p) {
+    AutoLock guard(background_lock);
+    for (auto &b : background) {
+        if (!b) {
+            b = std::move(p);
+            return true;
+        }
+    }
+    return false;
+}
+
+void wait_background() {
+    for (size_t i = 0; i < kMaxBackground; i++) {
+        lk::ref_ptr<proc> p;
+        {
+            AutoLock guard(background_lock);
+            p = std::move(background[i]);
+        }
+        if (p) {
+            p->wait();
+        }
+    }
+}
+
 } // namespace lkuser
 
 #if defined(WITH_LIB_CONSOLE)
@@ -250,10 +283,6 @@ struct {
     vaddr_t entry;
 } loaded;
 
-// started by "lkuser start", until "lkuser wait" has seen them exit
-constexpr size_t kMaxBackground = 8;
-lk::ref_ptr<lkuser::proc> background[kMaxBackground];
-
 int cmd_lkuser(int argc, const console_cmd_args *argv) {
     if (argc < 2) {
 notenoughargs:
@@ -262,7 +291,7 @@ usage:
         printf("%s load <path to binary> [args...]\n", argv[0].str);
         printf("%s run                start it, and wait for it to exit\n", argv[0].str);
         printf("%s start              start it; lkuser wait waits for it\n", argv[0].str);
-        printf("%s wait               until every process started with start has exited\n", argv[0].str);
+        printf("%s wait               until every process started with start, and every boot process, has exited\n", argv[0].str);
         printf("%s root <path>\n", argv[0].str);
         printf("%s objs [-f]          every object (-f: take no locks)\n", argv[0].str);
         printf("%s handles <pid> [-f] a process's handles\n", argv[0].str);
@@ -334,22 +363,12 @@ usage:
             p->wait();
             return 0;
         }
-        for (auto &b : background) {
-            if (!b) {
-                b = std::move(p);
-                break;
-            }
-        }
-        if (p) {
-            printf("lkuser: process %u runs, but lkuser wait will not wait for it\n", p->pid());
+        const uint32_t pid = p->pid();
+        if (!lkuser::add_background(std::move(p))) {
+            printf("lkuser: process %u runs, but lkuser wait will not wait for it\n", pid);
         }
     } else if (!strcmp(argv[1].str, "wait")) {
-        for (auto &b : background) {
-            if (b) {
-                b->wait();
-                b.reset();
-            }
-        }
+        lkuser::wait_background();
     } else if (!strcmp(argv[1].str, "objs")) {
         const bool lock = !(argc > 2 && !strcmp(argv[2].str, "-f"));
         lkuser::object::for_each([](lkuser::object &o) { o.dump(); }, lock);

@@ -17,9 +17,8 @@
 #include "copy.h"
 #include "object.h"
 
-#ifndef LKUSER_HANDLES
-#define LKUSER_HANDLES 64
-#endif
+// LKUSER_HANDLES, the slots of a handle table, comes from rules.mk
+static_assert(LKUSER_HANDLES >= 8 && LKUSER_HANDLES <= 1024, "a usable handle table");
 
 namespace lkuser {
 

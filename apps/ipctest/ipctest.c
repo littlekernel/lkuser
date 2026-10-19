@@ -536,7 +536,7 @@ static void test_impulses(void) {
     imp.type = LK_IMPULSE_CONN_CLOSED;
     CHECK_EQ(lk_impulse_send(conn, &imp), ERR_INVALID_ARGS);
     imp.type = LK_IMPULSE_USER_BASE + 1;
-    CHECK_EQ(lk_impulse_send(console_h, &imp), ERR_NOT_SUPPORTED);
+    CHECK_EQ(lk_impulse_send(time_h, &imp), ERR_NOT_SUPPORTED);
 
     // a call queued first, then the pool's worth of impulses, which all come before it
     struct client c = {.conn = conn, .op = 9, .timeout_ns = LK_TIME_INFINITE};
@@ -830,7 +830,7 @@ static void test_exit_notify(void) {
                               1, &p, NULL),
              ERR_ACCESS_DENIED);
     CHECK_EQ(lk_handle_close(notify), NO_ERROR);
-    notify = without(console_h, 0);
+    notify = without(time_h, 0);
     CHECK_EQ(lk_process_spawn(process_h, CHILD, 2, argv, LK_PROCESS_SPAWN_SERVICES, &notify, &tag,
                               1, &p, NULL),
              ERR_NOT_SUPPORTED);

@@ -29,7 +29,13 @@ CCACHE ?=
 ARCH ?= riscv
 
 BUILDDIR := build-$(ARCH)
-LK_TESTPROJECT := qemu-$(ARCH)-usertest
+
+# the kernel's profile, the project sys/project/qemu-$(ARCH)-$(PROFILE).mk:
+#   usertest  every kernel service; the console loads the apps (the default)
+#   consoled  usertest with the console served from user space by /bin/consoled, from boot
+PROFILE ?= usertest
+PROFILES := usertest consoled
+LK_TESTPROJECT := qemu-$(ARCH)-$(PROFILE)
 
 # some newlib stuff
 NEWLIB_BUILD_DIR := build-newlib-$(ARCH)
@@ -167,15 +173,28 @@ endif
 
 # apps run in order by test-auto, each as name[:arg...][&][=code]; each must exit with code
 # (default 0), and one that exits 0 must print <NAME>: PASS (upper-cased). One with & runs in
-# the background while the rest run, and must end by itself.
-TEST_APPS ?= rawtest:a:b:c calltest boottest posixtest spawntest faulttest=-40 ipctest echoserver& echotest
+# the background while the rest run, and must end by itself. TEST_BOOT names the processes the
+# profile starts at boot (LKUSER_BOOT), as name[=code], checked the same way; consoled ends when
+# consoletest:quit tells it to.
+TEST_APPS_COMMON := rawtest:a:b:c calltest boottest posixtest spawntest faulttest=-40 ipctest echoserver& echotest
+TEST_APPS_usertest := $(TEST_APPS_COMMON) consoletest
+TEST_APPS_consoled := $(TEST_APPS_COMMON) consoletest:quit
+TEST_BOOT_consoled := consoled
+TEST_APPS ?= $(TEST_APPS_$(PROFILE))
+TEST_BOOT ?= $(TEST_BOOT_$(PROFILE))
 TEST_TIMEOUT ?= 60
 TEST_SMP ?= 1
+TEST_LOG := $(BUILDDIR)/test-auto$(if $(filter-out usertest,$(PROFILE)),-$(PROFILE)).log
 
 test-auto: _all fs
 	scripts/qemu-test.sh -a $(ARCH) -k build-$(LK_TESTPROJECT)/lk.elf -f $(BUILDDIR)/root.fat \
-		-l $(BUILDDIR)/test-auto.log -t $(TEST_TIMEOUT) -s $(TEST_SMP) $(foreach a,$(TEST_APPS),'$(a)')
+		-l $(TEST_LOG) -t $(TEST_TIMEOUT) -s $(TEST_SMP) $(foreach b,$(TEST_BOOT),-b '$(b)') \
+		$(foreach a,$(TEST_APPS),'$(a)')
 
-.PHONY: all _all apps fs lk clean clean-apps spotless newlib build-newlib configure-newlib clean-newlib list-toolchain test test-auto
+# every profile's gate in turn
+test-auto-all:
+	$(NOECHO)for p in $(PROFILES); do $(MAKE) --no-print-directory test-auto PROFILE=$$p || exit 1; done
+
+.PHONY: all _all apps fs lk clean clean-apps spotless newlib build-newlib configure-newlib clean-newlib list-toolchain test test-auto test-auto-all
 
 # vim: set noexpandtab ts=4 sw=4:
