@@ -131,7 +131,11 @@ void boot_init(uint level) {
         }
         n++;
     }
-    fs_unmount(kBootMount);
+    // left mounted, the boot device would be mounted twice once the console mounts it
+    err = fs_unmount(kBootMount);
+    if (err < 0) {
+        printf("lkuser: boot: unmounting %s failed: %d\n", kBootMount, err);
+    }
 
     for (size_t i = 0; i < n; i++) {
         lk::ref_ptr<proc> &p = procs[i].p;
