@@ -6,39 +6,98 @@
  * https://opensource.org/licenses/MIT
  */
 
-// Calls built from a contiguous payload, and the clients of the kernel services on top.
+// Calls built from payloads, and the clients of the kernel services on top. Nothing here uses
+// the C library, so programs without one can call it.
 
 #include <lk/ipc.h>
 #include <lk/services.h>
 
-lk_status_t lk_msg_call(lk_handle_t conn, uint32_t op, const void *req, size_t req_len,
-                        void *reply, size_t reply_cap, size_t *reply_len) {
-    if (req_len > UINT32_MAX) {
-        return ERR_TOO_BIG;
+static size_t msg_strlen(const char *s) {
+    size_t n = 0;
+    while (s[n]) {
+        n++;
     }
-    struct lk_msg_hdr hdr = {.op = op, .len = (uint32_t)req_len};
-    struct lk_iov req_iov[2] = {{&hdr, sizeof(hdr)}, {(void *)req, req_len}};
+    return n;
+}
+
+lk_status_t lk_msg_callv(lk_handle_t conn, struct lk_msg *m) {
+    if (m->nreq > LK_IOV_MAX - 1 || m->nreply > LK_IOV_MAX - 1) {
+        return ERR_INVALID_ARGS;
+    }
+
+    struct lk_msg_hdr hdr = {.op = m->op};
     struct lk_msg_hdr reply_hdr = {0};
-    struct lk_iov reply_iov[2] = {{&reply_hdr, sizeof(reply_hdr)}, {reply, reply_cap}};
+    struct lk_iov req[LK_IOV_MAX];
+    struct lk_iov reply[LK_IOV_MAX];
+    req[0] = (struct lk_iov){&hdr, sizeof(hdr)};
+    reply[0] = (struct lk_iov){&reply_hdr, sizeof(reply_hdr)};
+    size_t req_len = 0;
+    for (size_t i = 0; i < m->nreq; i++) {
+        req[i + 1] = m->req[i];
+        req_len += m->req[i].len;
+        if (req_len < m->req[i].len || req_len > UINT32_MAX) {
+            return ERR_TOO_BIG;
+        }
+    }
+    for (size_t i = 0; i < m->nreply; i++) {
+        reply[i + 1] = m->reply[i];
+    }
+    hdr.len = (uint32_t)req_len;
+
     struct lk_call_args args = {
-        .req = req_iov,
-        .nreq = req_len ? 2 : 1,
-        .reply = reply_iov,
-        .nreply = reply_cap ? 2 : 1,
+        .req = req,
+        .nreq = m->nreq + 1,
+        .reply = reply,
+        .nreply = m->nreply + 1,
+        .reply_handles = m->handles,
+        .reply_nhandles = m->handles_max,
         .timeout_ns = LK_TIME_INFINITE,
     };
     lk_status_t err = lk_call(conn, &args);
     if (err < 0) {
         return err;
     }
-    if (reply_len) {
-        *reply_len = reply_hdr.len;
-    }
+    m->reply_len = reply_hdr.len;
+    m->nhandles = reply_hdr.nhandles;
     return reply_hdr.status;
+}
+
+lk_status_t lk_msg_call(lk_handle_t conn, uint32_t op, const void *req, size_t req_len,
+                        void *reply, size_t reply_cap, size_t *reply_len) {
+    const struct lk_iov req_iov = {(void *)req, req_len};
+    const struct lk_iov reply_iov = {reply, reply_cap};
+    struct lk_msg m = {
+        .op = op,
+        .req = &req_iov,
+        .nreq = req_len ? 1 : 0,
+        .reply = &reply_iov,
+        .nreply = reply_cap ? 1 : 0,
+    };
+    lk_status_t err = lk_msg_callv(conn, &m);
+    if (reply_len) {
+        *reply_len = m.reply_len;
+    }
+    return err;
 }
 
 lk_status_t lk_console_write(lk_handle_t console, const void *buf, size_t len) {
     return lk_msg_call(console, LK_CONSOLE_WRITE, buf, len, NULL, 0, NULL);
+}
+
+lk_status_t lk_console_read(lk_handle_t console, void *buf, size_t max, size_t *len) {
+    const struct lk_console_read_req req = {.max = max > UINT32_MAX ? UINT32_MAX : (uint32_t)max};
+    return lk_msg_call(console, LK_CONSOLE_READ, &req, sizeof(req), buf, max, len);
+}
+
+lk_status_t lk_console_winsize(lk_handle_t console, uint32_t *cols, uint32_t *rows) {
+    struct lk_console_winsize ws;
+    lk_status_t err = lk_msg_call(console, LK_CONSOLE_WINSIZE, NULL, 0, &ws, sizeof(ws), NULL);
+    if (err < 0) {
+        return err;
+    }
+    *cols = ws.cols;
+    *rows = ws.rows;
+    return NO_ERROR;
 }
 
 lk_status_t lk_process_info(lk_handle_t process, struct lk_process_info *info) {
@@ -76,4 +135,128 @@ lk_status_t lk_vm_alloc(lk_handle_t vm, size_t size, uint32_t prot, void **va) {
 lk_status_t lk_vm_unmap(lk_handle_t vm, void *va) {
     const struct lk_vm_unmap_req req = {.va = (uintptr_t)va};
     return lk_msg_call(vm, LK_VM_UNMAP, &req, sizeof(req), NULL, 0, NULL);
+}
+
+// A namespace request: flags and path, then whatever reply and handles the op returns.
+static lk_status_t ns_call(lk_handle_t ns, struct lk_msg *m, uint32_t flags, const char *path) {
+    const size_t len = msg_strlen(path);
+    if (len > UINT32_MAX) {
+        return ERR_TOO_BIG;
+    }
+    const struct lk_ns_path_req req = {.flags = flags, .path_len = (uint32_t)len};
+    const struct lk_iov req_iov[2] = {{(void *)&req, sizeof(req)}, {(void *)path, len}};
+    m->req = req_iov;
+    m->nreq = 2;
+    return lk_msg_callv(ns, m);
+}
+
+lk_status_t lk_ns_open(lk_handle_t ns, const char *path, uint32_t flags, lk_handle_t *file,
+                       struct lk_file_stat *st) {
+    struct lk_file_stat reply;
+    lk_handle_t h = LK_HANDLE_INVALID;
+    const struct lk_iov reply_iov = {&reply, sizeof(reply)};
+    struct lk_msg m = {
+        .op = LK_NS_OPEN, .reply = &reply_iov, .nreply = 1, .handles = &h, .handles_max = 1,
+    };
+    lk_status_t err = ns_call(ns, &m, flags, path);
+    if (err < 0) {
+        return err;
+    }
+    // an open that succeeded hands over exactly one connection
+    if (m.nhandles != 1) {
+        return ERR_BAD_STATE;
+    }
+    *file = h;
+    if (st) {
+        *st = reply;
+    }
+    return NO_ERROR;
+}
+
+lk_status_t lk_ns_stat(lk_handle_t ns, const char *path, struct lk_file_stat *st) {
+    const struct lk_iov reply_iov = {st, sizeof(*st)};
+    struct lk_msg m = {.op = LK_NS_STAT, .reply = &reply_iov, .nreply = 1};
+    return ns_call(ns, &m, 0, path);
+}
+
+lk_status_t lk_ns_mkdir(lk_handle_t ns, const char *path) {
+    struct lk_msg m = {.op = LK_NS_MKDIR};
+    return ns_call(ns, &m, 0, path);
+}
+
+lk_status_t lk_ns_unlink(lk_handle_t ns, const char *path) {
+    struct lk_msg m = {.op = LK_NS_UNLINK};
+    return ns_call(ns, &m, 0, path);
+}
+
+lk_status_t lk_ns_rmdir(lk_handle_t ns, const char *path) {
+    struct lk_msg m = {.op = LK_NS_RMDIR};
+    return ns_call(ns, &m, 0, path);
+}
+
+lk_status_t lk_file_read(lk_handle_t file, uint64_t off, void *buf, size_t len, size_t *nread) {
+    if (len > UINT32_MAX) {
+        len = UINT32_MAX;
+    }
+    const struct lk_file_read_req req = {.off = off, .len = (uint32_t)len};
+    return lk_msg_call(file, LK_FILE_READ, &req, sizeof(req), buf, len, nread);
+}
+
+lk_status_t lk_file_write(lk_handle_t file, uint64_t off, uint32_t flags, const void *buf,
+                          size_t len, size_t *nwritten, uint64_t *end) {
+    const struct lk_file_write_req req = {.off = off, .flags = flags};
+    // the payload's length fits 32 bits
+    if (len > UINT32_MAX - sizeof(req)) {
+        len = UINT32_MAX - sizeof(req);
+    }
+    struct lk_file_write_reply reply;
+    const struct lk_iov req_iov[2] = {{(void *)&req, sizeof(req)}, {(void *)buf, len}};
+    const struct lk_iov reply_iov = {&reply, sizeof(reply)};
+    struct lk_msg m = {
+        .op = LK_FILE_WRITE, .req = req_iov, .nreq = len ? 2 : 1, .reply = &reply_iov, .nreply = 1,
+    };
+    lk_status_t err = lk_msg_callv(file, &m);
+    if (err < 0) {
+        return err;
+    }
+    if (nwritten) {
+        *nwritten = reply.written;
+    }
+    if (end) {
+        *end = reply.end;
+    }
+    return NO_ERROR;
+}
+
+lk_status_t lk_file_fstat(lk_handle_t file, struct lk_file_stat *st) {
+    return lk_msg_call(file, LK_FILE_STAT, NULL, 0, st, sizeof(*st), NULL);
+}
+
+lk_status_t lk_file_truncate(lk_handle_t file, uint64_t size) {
+    const struct lk_file_truncate_req req = {.size = size};
+    return lk_msg_call(file, LK_FILE_TRUNCATE, &req, sizeof(req), NULL, 0, NULL);
+}
+
+lk_status_t lk_file_readdir(lk_handle_t dir, uint32_t index, char *name, size_t cap,
+                            size_t *name_len) {
+    if (cap == 0) {
+        return ERR_NOT_ENOUGH_BUFFER;
+    }
+    const struct lk_file_readdir_req req = {.index = index};
+    struct lk_file_dirent ent;
+    const struct lk_iov req_iov = {(void *)&req, sizeof(req)};
+    const struct lk_iov reply_iov[2] = {{&ent, sizeof(ent)}, {name, cap - 1}};
+    struct lk_msg m = {
+        .op = LK_FILE_READDIR, .req = &req_iov, .nreq = 1, .reply = reply_iov, .nreply = 2,
+    };
+    lk_status_t err = lk_msg_callv(dir, &m);
+    if (err < 0) {
+        return err;
+    }
+    const size_t len = ent.name_len < cap - 1 ? ent.name_len : cap - 1;
+    name[len] = '\0';
+    if (name_len) {
+        *name_len = len;
+    }
+    return NO_ERROR;
 }

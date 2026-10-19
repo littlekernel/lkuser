@@ -17,8 +17,8 @@
 namespace lkuser {
 
 // The kernel-resident services. Each svc/*.cpp registers one at boot, and every process the
-// console starts is born with a connection to each, under the service's startup tag. Which
-// files are compiled in is the build's choice (LKUSER_SERVICES in rules.mk).
+// console starts is born with a connection to each that has a startup tag, under that tag.
+// Which files are compiled in is the build's choice (LKUSER_SERVICES in rules.mk).
 struct service {
     uint32_t tag;
     lk::ref_ptr<endpoint> ep;
@@ -26,8 +26,14 @@ struct service {
 
 constexpr size_t kMaxServices = 8;
 
-// Called from an init hook, before any process exists, so the table needs no lock.
-void register_service(uint32_t tag, const char *name, kernel_handler_t handler);
+// The tag of a service no process is born connected to: its connections are made by another
+// service (file, by namespace.OPEN).
+constexpr uint32_t kNoTag = 0;
+
+// Called from an init hook, before any process exists, so the table needs no lock. Returns
+// the service's endpoint, or null if it could not be registered.
+lk::ref_ptr<endpoint> register_service(uint32_t tag, const char *name, kernel_handler_t handler,
+                                       kernel_release_t release_hook = nullptr);
 
 // the registered services, in registration order
 const service *services(size_t *count);

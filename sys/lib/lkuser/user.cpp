@@ -37,10 +37,7 @@
 #include "copy.h"
 #include "object.h"
 #include "proc.h"
-
-#ifndef FS_MAX_PATH_LEN
-#define FS_MAX_PATH_LEN 256
-#endif
+#include "user.h"
 
 #define LOCAL_TRACE 0
 
@@ -78,6 +75,8 @@ status_t set_fs_root(const char* path) {
     return NO_ERROR;
 }
 
+} // namespace
+
 status_t resolve_fs_path(const char* path, char* out_path, size_t out_path_len) {
     if (!path || !out_path || out_path_len == 0) {
         return ERR_INVALID_ARGS;
@@ -113,6 +112,8 @@ status_t resolve_fs_path(const char* path, char* out_path, size_t out_path_len) 
 
     return NO_ERROR;
 }
+
+namespace {
 
 ssize_t elf_read_hook_file(struct elf_handle *handle, void *buf, uint64_t offset, size_t len) {
     filehandle *fhandle = (filehandle *)handle->read_hook_arg;

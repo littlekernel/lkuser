@@ -69,6 +69,11 @@ public:
 
     status_t close(lk_handle_t h);
 
+    // As close(), only while h still names o (any object if o is null): undoes an add()
+    // without closing a handle that another thread has since closed and reused.
+    // ERR_BAD_HANDLE if it does not.
+    status_t close_if(lk_handle_t h, const object *o);
+
     // A second handle to h's object with h's rights & mask. Needs DUP; the rights can only
     // shrink.
     status_t dup(lk_handle_t h, uint32_t mask, lk_handle_t *out);

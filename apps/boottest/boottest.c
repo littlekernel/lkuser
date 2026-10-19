@@ -7,8 +7,9 @@
  */
 
 // Boot smoke test for a newlib program: static data, stdio, floating point, the heap behind
-// malloc and sbrk, and the exit path. Reads no input. Prints BOOTTEST: PASS and returns 0
-// when every check holds; each failed check prints a BOOTTEST: FAIL line and main returns 1.
+// malloc and sbrk, and the exit path. Reads no input. The verdict comes from an exit handler,
+// so the gate sees BOOTTEST: PASS only if exit runs them: PASS with exit code 0 when every
+// check holds; else each failed check prints a BOOTTEST: FAIL line and the code is 1.
 
 #include <stdint.h>
 #include <stdio.h>
@@ -50,7 +51,11 @@ static int verify(const unsigned char *p, size_t len, unsigned seed) {
 }
 
 static void at_exit(void) {
-    printf("BOOTTEST: atexit ran\n");
+    if (failures) {
+        printf("BOOTTEST: FAIL (%d checks)\n", failures);
+    } else {
+        printf("BOOTTEST: PASS\n");
+    }
 }
 
 static void test_static_data(void) {
@@ -114,6 +119,40 @@ static void test_malloc(void) {
     printf("BOOTTEST: malloc ok\n");
 }
 
+// The heap grows in 64KB chunks of vm.ALLOC memory: blocks live in several chunks at once,
+// some bigger than a chunk, all filled before any is checked.
+static void test_heap_growth(void) {
+    enum { NBLOCKS = 6 };
+    static const size_t sizes[NBLOCKS] = {
+        40 * 1024, 70 * 1024, 24 * 1024, 200 * 1024, 64 * 1024, 100 * 1024,
+    };
+    unsigned char *blocks[NBLOCKS];
+    for (int i = 0; i < NBLOCKS; i++) {
+        blocks[i] = malloc(sizes[i]);
+        CHECK(blocks[i] != NULL);
+        if (blocks[i]) {
+            fill(blocks[i], sizes[i], 20 + i);
+        }
+    }
+    for (int i = 0; i < NBLOCKS; i++) {
+        if (blocks[i]) {
+            CHECK(verify(blocks[i], sizes[i], 20 + i));
+        }
+    }
+
+    // a block bigger than a chunk keeps its bytes when realloc grows it
+    unsigned char *q = realloc(blocks[3], 300 * 1024);
+    CHECK(q != NULL);
+    if (q) {
+        CHECK(verify(q, sizes[3], 23));
+        blocks[3] = q;
+    }
+    for (int i = 0; i < NBLOCKS; i++) {
+        free(blocks[i]);
+    }
+    printf("BOOTTEST: heap growth ok\n");
+}
+
 static void test_sbrk(void) {
     unsigned char *p = sbrk(8192);
     CHECK(p != NULL && p != (void *)-1);
@@ -126,18 +165,13 @@ static void test_sbrk(void) {
 
 int main(void) {
     printf("BOOTTEST: start\n");
+    CHECK(atexit(at_exit) == 0);
 
     test_static_data();
     test_float();
     test_malloc();
+    test_heap_growth();
     test_sbrk();
 
-    atexit(at_exit);
-
-    if (failures) {
-        printf("BOOTTEST: FAIL (%d checks)\n", failures);
-        return 1;
-    }
-    printf("BOOTTEST: PASS\n");
-    return 0;
+    return failures ? 1 : 0;
 }

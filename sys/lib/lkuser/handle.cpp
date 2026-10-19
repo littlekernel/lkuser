@@ -83,11 +83,15 @@ status_t handle_table::get(lk_handle_t h, uint32_t need, lk::ref_ptr<object> *ou
 }
 
 status_t handle_table::close(lk_handle_t h) {
+    return close_if(h, nullptr);
+}
+
+status_t handle_table::close_if(lk_handle_t h, const object *o) {
     lk::ref_ptr<object> obj;
     {
         AutoLock guard(lock_);
         slot *s = find_locked(h);
-        if (!s) {
+        if (!s || (o && s->obj.get() != o)) {
             return ERR_BAD_HANDLE;
         }
         obj = std::move(s->obj);

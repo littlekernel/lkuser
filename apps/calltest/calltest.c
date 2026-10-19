@@ -7,8 +7,9 @@
  */
 
 // Native API test with no libc: calls the kernel services over the connections the process is
-// born with, and checks handles and their rights, endpoints, and how the call path treats
-// every malformed call and bad buffer it can be given. Progress lines and CALLTEST: PASS go
+// born with, and checks handles and their rights, endpoints, how the call path treats every
+// malformed call and bad buffer it can be given, handles carried by replies, and files and
+// directories through the namespace and file services. Progress lines and CALLTEST: PASS go
 // through the console service; each failed check prints a CALLTEST: FAIL line through
 // debug_write and the exit code is 1.
 
@@ -21,8 +22,13 @@
 #define BIG (64 * 1024)
 // slots in the kernel's handle table in this build
 #define HANDLE_SLOTS 64
+// made and removed again by the file tests, in the image's root
+#define TMP_FILE "/calltest.tmp"
+#define TMP_DIR  "/calltest.dir"
+// no table has this many slots
+#define NOT_A_HANDLE 0xffffffffu
 
-static lk_handle_t console_h, vm_h, time_h, process_h, echo_h;
+static lk_handle_t console_h, vm_h, time_h, process_h, echo_h, ns_h;
 static uint32_t startup_handles;
 
 static void say(const char *s) {
@@ -51,6 +57,20 @@ static int same(const uint8_t *a, const uint8_t *b, size_t len) {
         }
     }
     return 1;
+}
+
+// equal ignoring ASCII case: FAT keeps names in either
+static int name_eq(const char *a, const char *b) {
+    for (;; a++, b++) {
+        char x = *a >= 'A' && *a <= 'Z' ? (char)(*a + 32) : *a;
+        char y = *b >= 'A' && *b <= 'Z' ? (char)(*b + 32) : *b;
+        if (x != y) {
+            return 0;
+        }
+        if (!x) {
+            return 1;
+        }
+    }
 }
 
 // A call with the caller's own iovecs: the transport's status, and the furthest reply byte.
@@ -85,12 +105,14 @@ static void test_startup(const struct lk_proc_args *args) {
     time_h = lk_proc_args_find(args, LK_TAG_TIME);
     process_h = lk_proc_args_find(args, LK_TAG_PROCESS);
     echo_h = lk_proc_args_find(args, LK_TAG_TEST_ECHO);
+    ns_h = lk_proc_args_find(args, LK_TAG_NAMESPACE);
     startup_handles = args->nhandles;
     CHECK(console_h != LK_HANDLE_INVALID);
     CHECK(vm_h != LK_HANDLE_INVALID);
     CHECK(time_h != LK_HANDLE_INVALID);
     CHECK(process_h != LK_HANDLE_INVALID);
     CHECK(echo_h != LK_HANDLE_INVALID);
+    CHECK(ns_h != LK_HANDLE_INVALID);
     test_check_failures();
 }
 
@@ -124,6 +146,21 @@ static void test_console(void) {
     CHECK_EQ(rhdr.op, 99);
     CHECK_EQ(reply_len, sizeof(rhdr));
     CHECK_EQ(lk_msg_call(console_h, 99, NULL, 0, NULL, 0, NULL), ERR_NOT_SUPPORTED);
+
+    // reading waits for a line, but not when there is no room for one; the gate's input is
+    // closed, so the rest of READ is checked by hand
+    char line[4];
+    size_t len = 99;
+    CHECK_EQ(lk_console_read(console_h, line, 0, &len), NO_ERROR);
+    CHECK_EQ(len, 0);
+    CHECK_EQ(lk_msg_call(console_h, LK_CONSOLE_READ, NULL, 0, line, sizeof(line), NULL),
+             ERR_INVALID_ARGS);
+
+    uint32_t cols = 0, rows = 0;
+    CHECK_EQ(lk_console_winsize(console_h, &cols, &rows), NO_ERROR);
+    CHECK(cols > 0 && rows > 0);
+    CHECK_EQ(lk_msg_call(console_h, LK_CONSOLE_WINSIZE, line, 1, line, sizeof(line), NULL),
+             ERR_INVALID_ARGS);
 }
 
 static void test_handles(void) {
@@ -259,7 +296,9 @@ static void test_transport(void) {
     CHECK_EQ(call_iov(echo_h, req, 1, reply, 1, NULL), ERR_INVALID_ARGS);
     hdr.nhandles = 0;
 
-    // carrying handles comes later; asking for more reply handles than a message can carry
+    // carrying handles in a request comes later; asking for more reply handles than a
+    // message can carry; room for reply handles that cannot be written
+    lk_handle_t rh[LK_MSG_MAX_HANDLES];
     struct lk_call_args args = {
         .req = req, .nreq = 1, .reply = reply, .nreply = 1, .timeout_ns = LK_TIME_INFINITE,
     };
@@ -269,10 +308,22 @@ static void test_transport(void) {
     args.handles = NULL;
     args.nhandles = 0;
     args.reply_nhandles = LK_MSG_MAX_HANDLES + 1;
+    args.reply_handles = rh;
     CHECK_EQ(lk_call(echo_h, &args), ERR_INVALID_ARGS);
     args.reply_nhandles = LK_MSG_MAX_HANDLES;
+    args.reply_handles = NULL;
+    CHECK_EQ(lk_call(echo_h, &args), ERR_FAULT);
+    // the room the reply did not use reads as no handle
+    args.reply_handles = rh;
+    for (int i = 0; i < LK_MSG_MAX_HANDLES; i++) {
+        rh[i] = NOT_A_HANDLE;
+    }
     CHECK_EQ(lk_call(echo_h, &args), NO_ERROR);
     CHECK_EQ(args.reply_len, sizeof(rhdr));
+    CHECK_EQ(rhdr.nhandles, 0);
+    for (int i = 0; i < LK_MSG_MAX_HANDLES; i++) {
+        CHECK_EQ(rh[i], LK_HANDLE_INVALID);
+    }
 
     // a fault on the caller's buffers while the service runs fails the call: past the
     // prefix in the request, in the reply's payload, in the reply's header
@@ -456,6 +507,276 @@ static void test_process(void) {
     say("CALLTEST: process ok\n");
 }
 
+// A namespace request built by hand: flags, the path_len it claims, and len bytes of path.
+static lk_status_t ns_req(struct lk_msg *m, uint32_t flags, uint32_t path_len, const char *path,
+                          size_t len) {
+    const struct lk_ns_path_req req = {.flags = flags, .path_len = path_len};
+    const struct lk_iov iov[2] = {{(void *)&req, sizeof(req)}, {(void *)path, len}};
+    m->req = iov;
+    m->nreq = len ? 2 : 1;
+    return lk_msg_callv(ns_h, m);
+}
+
+static lk_status_t ns_open_path(struct lk_msg *m, uint32_t flags, const char *path) {
+    const uint32_t len = (uint32_t)test_strlen(path);
+    return ns_req(m, flags, len, path, len);
+}
+
+// what namespace.OPEN's flags and paths may be
+static lk_status_t open_status(uint32_t flags, const char *path) {
+    lk_handle_t h = LK_HANDLE_INVALID;
+    lk_status_t err = lk_ns_open(ns_h, path, flags, &h, NULL);
+    if (err == NO_ERROR) {
+        lk_handle_close(h);
+    }
+    return err;
+}
+
+static void test_reply_handles(void) {
+    struct lk_file_stat st;
+    lk_handle_t rh[LK_MSG_MAX_HANDLES];
+    lk_handle_t f;
+    lk_ns_unlink(ns_h, TMP_FILE);
+
+    // a reply's handle lands in the caller's array, the rest of which reads as no handle
+    for (int i = 0; i < LK_MSG_MAX_HANDLES; i++) {
+        rh[i] = NOT_A_HANDLE;
+    }
+    const struct lk_iov reply = {&st, sizeof(st)};
+    struct lk_msg m = {
+        .op = LK_NS_OPEN, .reply = &reply, .nreply = 1, .handles = rh,
+        .handles_max = LK_MSG_MAX_HANDLES,
+    };
+    CHECK_EQ(ns_open_path(&m, LK_NS_OPEN_READ, "/bin/calltest"), NO_ERROR);
+    CHECK_EQ(m.nhandles, 1);
+    CHECK(rh[0] != LK_HANDLE_INVALID && rh[0] != NOT_A_HANDLE);
+    for (int i = 1; i < LK_MSG_MAX_HANDLES; i++) {
+        CHECK_EQ(rh[i], LK_HANDLE_INVALID);
+    }
+    CHECK_EQ(lk_file_fstat(rh[0], &st), NO_ERROR);
+    CHECK_EQ(lk_handle_close(rh[0]), NO_ERROR);
+
+    // a refusal carries none
+    rh[0] = NOT_A_HANDLE;
+    CHECK_EQ(ns_open_path(&m, LK_NS_OPEN_READ, "/no/such/file"), ERR_NOT_FOUND);
+    CHECK_EQ(m.nhandles, 0);
+    CHECK_EQ(rh[0], LK_HANDLE_INVALID);
+
+    // with no room for the handle nothing is created
+    m.handles_max = 0;
+    CHECK_EQ(ns_open_path(&m, LK_NS_OPEN_CREATE | LK_NS_OPEN_WRITE, TMP_FILE),
+             ERR_NOT_ENOUGH_BUFFER);
+    CHECK_EQ(lk_ns_stat(ns_h, TMP_FILE, &st), ERR_NOT_FOUND);
+    // nor where the room cannot be written: the call fails before the service runs
+    void *ro = NULL;
+    CHECK_EQ(lk_vm_alloc(vm_h, PAGE, LK_VM_PROT_READ, &ro), NO_ERROR);
+    m.handles = ro;
+    m.handles_max = 1;
+    CHECK_EQ(ns_open_path(&m, LK_NS_OPEN_CREATE | LK_NS_OPEN_WRITE, TMP_FILE), ERR_FAULT);
+    CHECK_EQ(lk_ns_stat(ns_h, TMP_FILE, &st), ERR_NOT_FOUND);
+    CHECK_EQ(lk_vm_unmap(vm_h, ro), NO_ERROR);
+
+    // a call that fails after the handle went into the table takes it back: the reply's
+    // payload faults once the service has opened the file, and the slot is free again
+    lk_handle_t probe;
+    CHECK_EQ(lk_handle_dup(console_h, LK_RIGHTS_ALL, &probe), NO_ERROR);
+    CHECK_EQ(lk_handle_close(probe), NO_ERROR);
+    const struct lk_iov hole = {unmapped_page(), sizeof(st)};
+    m.reply = &hole;
+    m.handles = rh;
+    CHECK_EQ(ns_open_path(&m, LK_NS_OPEN_CREATE | LK_NS_OPEN_WRITE, TMP_FILE), ERR_FAULT);
+    m.reply = &reply;
+    CHECK_EQ(lk_handle_dup(console_h, LK_RIGHTS_ALL, &f), NO_ERROR);
+    CHECK_EQ(f, probe);
+    CHECK_EQ(lk_handle_close(f), NO_ERROR);
+    CHECK_EQ(lk_ns_unlink(ns_h, TMP_FILE), NO_ERROR);
+
+    // with a full table the service says so, and the file it had opened is closed again:
+    // unlink refuses a file that is open
+    CHECK_EQ(lk_ns_open(ns_h, TMP_FILE, LK_NS_OPEN_CREATE | LK_NS_OPEN_WRITE, &f, NULL),
+             NO_ERROR);
+    CHECK_EQ(lk_ns_unlink(ns_h, TMP_FILE), ERR_BUSY);
+    CHECK_EQ(lk_handle_close(f), NO_ERROR);
+    lk_handle_t dups[HANDLE_SLOTS];
+    uint32_t n = 0;
+    while (n < HANDLE_SLOTS && lk_handle_dup(console_h, LK_RIGHTS_ALL, &dups[n]) == NO_ERROR) {
+        n++;
+    }
+    m.handles = rh;
+    rh[0] = NOT_A_HANDLE;
+    CHECK_EQ(ns_open_path(&m, LK_NS_OPEN_READ, TMP_FILE), ERR_NO_RESOURCES);
+    CHECK_EQ(m.nhandles, 0);
+    CHECK_EQ(rh[0], LK_HANDLE_INVALID);
+    while (n > 0) {
+        CHECK_EQ(lk_handle_close(dups[--n]), NO_ERROR);
+    }
+    CHECK_EQ(lk_ns_unlink(ns_h, TMP_FILE), NO_ERROR);
+
+    say("CALLTEST: reply handles ok\n");
+}
+
+static void test_files(void) {
+    lk_handle_t f, h;
+    struct lk_file_stat st;
+    uint8_t buf[600];
+    uint8_t back[700];
+    char name[LK_NAME_MAX + 1];
+    size_t n;
+    uint64_t end;
+
+    // what a run that died part way may have left
+    lk_ns_unlink(ns_h, TMP_FILE);
+    lk_ns_unlink(ns_h, TMP_DIR "/a");
+    lk_ns_rmdir(ns_h, TMP_DIR);
+
+    // an image file: at an offset, up to the end, past it
+    CHECK_EQ(lk_ns_open(ns_h, "/bin/calltest", LK_NS_OPEN_READ, &f, &st), NO_ERROR);
+    CHECK_EQ(st.type, LK_FILE_TYPE_FILE);
+    CHECK(st.size > sizeof(buf));
+    CHECK_EQ(lk_file_read(f, 0, buf, sizeof(buf), &n), NO_ERROR);
+    CHECK_EQ(n, sizeof(buf));
+    CHECK(buf[0] == 0x7f && buf[1] == 'E' && buf[2] == 'L' && buf[3] == 'F');
+    CHECK_EQ(lk_file_read(f, 500, back, 100, &n), NO_ERROR);
+    CHECK_EQ(n, 100);
+    CHECK(same(buf + 500, back, 100));
+    CHECK_EQ(lk_file_read(f, st.size - 10, back, sizeof(back), &n), NO_ERROR);
+    CHECK_EQ(n, 10);
+    CHECK_EQ(lk_file_read(f, st.size, back, sizeof(back), &n), NO_ERROR);
+    CHECK_EQ(n, 0);
+    // opened only for reading, and not a directory
+    CHECK_EQ(lk_file_write(f, 0, 0, "x", 1, NULL, NULL), ERR_ACCESS_DENIED);
+    CHECK_EQ(lk_file_truncate(f, 0), ERR_ACCESS_DENIED);
+    CHECK_EQ(lk_file_readdir(f, 0, name, sizeof(name), NULL), ERR_NOT_DIR);
+    CHECK_EQ(lk_msg_call(f, 99, NULL, 0, NULL, 0, NULL), ERR_NOT_SUPPORTED);
+    // the connection's rights work like any other's
+    CHECK_EQ(lk_handle_dup(f, LK_RIGHTS_ALL & ~LK_RIGHT_CALL, &h), NO_ERROR);
+    CHECK_EQ(lk_file_fstat(h, &st), ERR_ACCESS_DENIED);
+    CHECK_EQ(lk_handle_close(h), NO_ERROR);
+    CHECK_EQ(lk_handle_close(f), NO_ERROR);
+
+    // a file of its own: written, read back, appended to, cut short
+    CHECK_EQ(lk_ns_open(ns_h, TMP_FILE,
+                        LK_NS_OPEN_CREATE | LK_NS_OPEN_EXCL | LK_NS_OPEN_READ | LK_NS_OPEN_WRITE,
+                        &f, &st),
+             NO_ERROR);
+    CHECK_EQ(st.size, 0);
+    fill(buf, sizeof(buf), 9);
+    CHECK_EQ(lk_file_write(f, 0, 0, buf, sizeof(buf), &n, &end), NO_ERROR);
+    CHECK_EQ(n, sizeof(buf));
+    CHECK_EQ(end, sizeof(buf));
+    CHECK_EQ(lk_file_write(f, 0, LK_FILE_WRITE_APPEND, buf, 100, &n, &end), NO_ERROR);
+    CHECK_EQ(n, 100);
+    CHECK_EQ(end, sizeof(buf) + 100);
+    CHECK_EQ(lk_file_read(f, 0, back, sizeof(back), &n), NO_ERROR);
+    CHECK_EQ(n, sizeof(buf) + 100);
+    CHECK(same(back, buf, sizeof(buf)));
+    CHECK(same(back + sizeof(buf), buf, 100));
+    CHECK_EQ(lk_file_truncate(f, 300), NO_ERROR);
+    CHECK_EQ(lk_file_fstat(f, &st), NO_ERROR);
+    CHECK_EQ(st.size, 300);
+    CHECK_EQ(lk_file_write(f, 0, 1u << 5, buf, 1, NULL, NULL), ERR_INVALID_ARGS);
+    CHECK_EQ(lk_file_read(f, (uint64_t)1 << 63, back, 1, &n), ERR_INVALID_ARGS);
+    // a write whose count could not come back writes nothing
+    CHECK_EQ(lk_msg_call(f, LK_FILE_WRITE, &(struct lk_file_write_req){.off = 0}, 16, NULL, 0,
+                         NULL),
+             ERR_NOT_ENOUGH_BUFFER);
+    // in use, and there already
+    CHECK_EQ(lk_ns_unlink(ns_h, TMP_FILE), ERR_BUSY);
+    CHECK_EQ(open_status(LK_NS_OPEN_CREATE | LK_NS_OPEN_EXCL | LK_NS_OPEN_WRITE, TMP_FILE),
+             ERR_ALREADY_EXISTS);
+    CHECK_EQ(lk_handle_close(f), NO_ERROR);
+    CHECK_EQ(lk_ns_stat(ns_h, TMP_FILE, &st), NO_ERROR);
+    CHECK_EQ(st.type, LK_FILE_TYPE_FILE);
+    CHECK_EQ(st.size, 300);
+    CHECK_EQ(lk_ns_open(ns_h, TMP_FILE, LK_NS_OPEN_WRITE | LK_NS_OPEN_TRUNC, &f, &st), NO_ERROR);
+    CHECK_EQ(st.size, 0);
+    CHECK_EQ(lk_file_read(f, 0, back, 1, &n), ERR_ACCESS_DENIED);
+    CHECK_EQ(lk_handle_close(f), NO_ERROR);
+    CHECK_EQ(lk_ns_unlink(ns_h, TMP_FILE), NO_ERROR);
+    CHECK_EQ(lk_ns_stat(ns_h, TMP_FILE, &st), ERR_NOT_FOUND);
+
+    // a directory: listed, refused as a file and the other way around, removed once empty
+    CHECK_EQ(lk_ns_mkdir(ns_h, TMP_DIR), NO_ERROR);
+    CHECK_EQ(lk_ns_mkdir(ns_h, TMP_DIR), ERR_ALREADY_EXISTS);
+    CHECK_EQ(lk_ns_stat(ns_h, TMP_DIR, &st), NO_ERROR);
+    CHECK_EQ(st.type, LK_FILE_TYPE_DIR);
+    CHECK_EQ(open_status(LK_NS_OPEN_CREATE | LK_NS_OPEN_WRITE, TMP_DIR "/a"), NO_ERROR);
+    CHECK_EQ(open_status(LK_NS_OPEN_READ, TMP_DIR), ERR_NOT_FILE);
+    CHECK_EQ(open_status(LK_NS_OPEN_DIR, TMP_DIR "/a"), ERR_NOT_DIR);
+    CHECK_EQ(lk_ns_open(ns_h, TMP_DIR, LK_NS_OPEN_DIR, &h, &st), NO_ERROR);
+    CHECK_EQ(st.type, LK_FILE_TYPE_DIR);
+    int found = 0;
+    uint32_t i = 0;
+    lk_status_t err;
+    while ((err = lk_file_readdir(h, i, name, sizeof(name), &n)) == NO_ERROR) {
+        CHECK_EQ(n, test_strlen(name));
+        if (name_eq(name, "a")) {
+            found++;
+        } else {
+            CHECK(test_streq(name, ".") || test_streq(name, ".."));
+        }
+        i++;
+    }
+    CHECK_EQ(err, ERR_NOT_FOUND);
+    CHECK_EQ(found, 1);
+    // going back to an earlier entry, and a name with no room
+    CHECK_EQ(lk_file_readdir(h, 0, name, sizeof(name), NULL), NO_ERROR);
+    CHECK_EQ(lk_file_readdir(h, 0, name, 1, NULL), ERR_NOT_ENOUGH_BUFFER);
+    CHECK_EQ(lk_file_read(h, 0, back, 1, &n), ERR_NOT_FILE);
+    CHECK_EQ(lk_file_fstat(h, &st), NO_ERROR);
+    CHECK_EQ(st.type, LK_FILE_TYPE_DIR);
+    CHECK_EQ(lk_handle_close(h), NO_ERROR);
+    CHECK_EQ(lk_ns_rmdir(ns_h, TMP_DIR), ERR_NOT_ALLOWED);
+    CHECK_EQ(lk_ns_unlink(ns_h, TMP_DIR), ERR_NOT_FILE);
+    CHECK_EQ(lk_ns_rmdir(ns_h, TMP_DIR "/a"), ERR_NOT_DIR);
+    CHECK_EQ(lk_ns_unlink(ns_h, TMP_DIR "/a"), NO_ERROR);
+    CHECK_EQ(lk_ns_rmdir(ns_h, TMP_DIR), NO_ERROR);
+    CHECK_EQ(lk_ns_stat(ns_h, TMP_DIR, &st), ERR_NOT_FOUND);
+
+    say("CALLTEST: files ok\n");
+}
+
+static void test_paths(void) {
+    struct lk_file_stat st;
+    struct lk_msg m = {.op = LK_NS_STAT};
+    const struct lk_iov reply = {&st, sizeof(st)};
+    m.reply = &reply;
+    m.nreply = 1;
+
+    // normalized before the root goes in front: ".." stops at the root, so a path climbing
+    // out of it and back in names nothing
+    CHECK_EQ(lk_ns_stat(ns_h, "/bin/../bin/./calltest", &st), NO_ERROR);
+    CHECK_EQ(lk_ns_stat(ns_h, "/../bin/calltest", &st), NO_ERROR);
+    CHECK_EQ(lk_ns_stat(ns_h, "/../fs/bin/calltest", &st), ERR_NOT_FOUND);
+    CHECK_EQ(lk_ns_stat(ns_h, "/", &st), NO_ERROR);
+    CHECK_EQ(st.type, LK_FILE_TYPE_DIR);
+
+    // relative, empty, holding a NUL, a length that disagrees, too long
+    CHECK_EQ(lk_ns_stat(ns_h, "bin/calltest", &st), ERR_BAD_PATH);
+    CHECK_EQ(ns_req(&m, 0, 0, "", 0), ERR_BAD_PATH);
+    CHECK_EQ(ns_req(&m, 0, 6, "/bin\0x", 6), ERR_BAD_PATH);
+    CHECK_EQ(ns_req(&m, 0, 5, "/bin", 4), ERR_INVALID_ARGS);
+    char longpath[201];
+    for (int i = 0; i < 200; i++) {
+        longpath[i] = i % 8 ? 'a' : '/';
+    }
+    longpath[200] = '\0';
+    CHECK_EQ(lk_ns_stat(ns_h, longpath, &st), ERR_TOO_BIG);
+    CHECK_EQ(lk_msg_call(ns_h, LK_NS_STAT, "ab", 2, &st, sizeof(st), NULL), ERR_INVALID_ARGS);
+
+    // flags: only OPEN takes them, and only these mixes
+    CHECK_EQ(ns_req(&m, LK_NS_OPEN_READ, 4, "/bin", 4), ERR_INVALID_ARGS);
+    CHECK_EQ(open_status(1u << 6 | LK_NS_OPEN_READ, "/bin/calltest"), ERR_INVALID_ARGS);
+    CHECK_EQ(open_status(0, "/bin/calltest"), ERR_INVALID_ARGS);
+    CHECK_EQ(open_status(LK_NS_OPEN_DIR | LK_NS_OPEN_READ, "/bin"), ERR_INVALID_ARGS);
+    CHECK_EQ(open_status(LK_NS_OPEN_READ | LK_NS_OPEN_EXCL, "/bin/calltest"), ERR_INVALID_ARGS);
+    CHECK_EQ(open_status(LK_NS_OPEN_READ | LK_NS_OPEN_TRUNC, "/bin/calltest"), ERR_INVALID_ARGS);
+    CHECK_EQ(open_status(LK_NS_OPEN_DIR, "/bin"), NO_ERROR);
+    CHECK_EQ(lk_msg_call(ns_h, 99, NULL, 0, NULL, 0, NULL), ERR_NOT_SUPPORTED);
+
+    say("CALLTEST: paths ok\n");
+}
+
 void _start_c(const struct lk_proc_args *args) __attribute__((noreturn));
 void _start_c(const struct lk_proc_args *args) {
     test_put("CALLTEST: start\n");
@@ -469,6 +790,9 @@ void _start_c(const struct lk_proc_args *args) {
     test_vm();
     test_time();
     test_process();
+    test_reply_handles();
+    test_files();
+    test_paths();
 
     test_check_failures();
     say("CALLTEST: PASS\n");

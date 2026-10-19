@@ -27,17 +27,26 @@ class thread;
 // with interrupts enabled, and returns the service's status, which the reply header carries.
 using kernel_handler_t = lk_status_t (*)(kcall &call);
 
+// A kernel endpoint's per-connection cleanup: called with a connection's cookie when the
+// connection is destroyed, on whichever thread drops the last reference, with no lock held and
+// perhaps no user address space. State a service keeps per connection (an open file) thus
+// lives as long as the connection object, which a call in progress keeps alive past its last
+// handle.
+using kernel_release_t = void (*)(uint64_t cookie);
+
 // The receiving side of a service: a handler in the kernel, or the threads of a user server
 // receiving on it.
 class endpoint : public object {
 public:
     static constexpr obj_kind kKind = obj_kind::ENDPOINT;
 
-    // name is static text, for the console
-    static lk::ref_ptr<endpoint> create_kernel(const char *name, kernel_handler_t handler);
+    // name is static text, for the console; release_hook may be null
+    static lk::ref_ptr<endpoint> create_kernel(const char *name, kernel_handler_t handler,
+                                               kernel_release_t release_hook);
 
     bool is_kernel() const { return handler_ != nullptr; }
     kernel_handler_t handler() const { return handler_; }
+    kernel_release_t release_hook() const { return release_hook_; }
     const char *name() const { return name_; }
     uint32_t flags() const { return flags_; }
     uint32_t max_active() const { return max_active_; }
@@ -51,22 +60,24 @@ public:
 private:
     friend class object;
 
-    endpoint(const char *name, kernel_handler_t fn, uint32_t flags, uint32_t max_active,
-             uint64_t cookie)
-        : object(kKind), name_(name), handler_(fn), flags_(flags), max_active_(max_active),
-          cookie_(cookie) {}
+    endpoint(const char *name, kernel_handler_t fn, kernel_release_t rel, uint32_t flags,
+             uint32_t max_active, uint64_t cookie)
+        : object(kKind), name_(name), handler_(fn), release_hook_(rel), flags_(flags),
+          max_active_(max_active), cookie_(cookie) {}
     ~endpoint() = default;
     DISALLOW_COPY_ASSIGN_AND_MOVE(endpoint);
 
     const char *const name_;
     const kernel_handler_t handler_;
+    const kernel_release_t release_hook_;
     const uint32_t flags_;
     const uint32_t max_active_;
     const uint64_t cookie_;
     bool closed_ = false;
 };
 
-// A client's way to an endpoint, made by connect.
+// A client's way to an endpoint, made by connect, or by a kernel service with a cookie naming
+// its state for the connection (namespace.OPEN's open file).
 class connection : public object {
 public:
     static constexpr obj_kind kKind = obj_kind::CONNECTION;
@@ -77,12 +88,14 @@ public:
 private:
     friend class object;
 
-    explicit connection(lk::ref_ptr<endpoint> ep) : object(kKind), ep_(std::move(ep)) {}
-    ~connection() = default;
+    explicit connection(lk::ref_ptr<endpoint> ep, uint64_t cookie = 0)
+        : object(kKind), ep_(std::move(ep)), cookie_(cookie) {}
+    // runs a kernel endpoint's release hook
+    ~connection();
     DISALLOW_COPY_ASSIGN_AND_MOVE(connection);
 
     const lk::ref_ptr<endpoint> ep_;
-    uint64_t cookie_ = 0;
+    uint64_t cookie_;
 };
 
 // A connection to ep installed in p's table with the default rights.
@@ -100,6 +113,7 @@ public:
     uint32_t op() const { return hdr_.op; }
     size_t len() const { return hdr_.len; }  // request payload
     size_t reply_capacity() const;           // reply payload
+    size_t reply_handles_capacity() const { return pc_.reply_handles_cap; }
     proc *caller() const;
     thread *caller_thread() const { return thread_; }
     const connection &conn() const { return *conn_; }
@@ -130,6 +144,13 @@ public:
         ssize_t n = write(0, &r, sizeof(T));
         return n < 0 ? static_cast<lk_status_t>(n) : NO_ERROR;
     }
+
+    // A handle to obj with rights, carried by the reply. It goes into the caller's table now,
+    // so a full table is the handler's ERR_NO_RESOURCES to report, and is closed again if the
+    // handler returns an error or the call fails. ERR_NOT_ENOUGH_BUFFER past the caller's room
+    // for reply handles; a handler checks reply_handles_capacity() before doing work it would
+    // have to undo.
+    lk_status_t reply_handle(lk::ref_ptr<object> obj, uint32_t rights);
 
 private:
     friend status_t call_kernel(thread *t, const connection &conn, pending_call &pc,

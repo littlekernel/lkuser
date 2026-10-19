@@ -18,17 +18,19 @@ size_t service_count;
 
 } // namespace
 
-void register_service(uint32_t tag, const char *name, kernel_handler_t handler) {
+lk::ref_ptr<endpoint> register_service(uint32_t tag, const char *name, kernel_handler_t handler,
+                                       kernel_release_t release_hook) {
     if (service_count == kMaxServices) {
         printf("lkuser: no room for service %s\n", name);
-        return;
+        return nullptr;
     }
-    lk::ref_ptr<endpoint> ep = endpoint::create_kernel(name, handler);
+    lk::ref_ptr<endpoint> ep = endpoint::create_kernel(name, handler, release_hook);
     if (!ep) {
         printf("lkuser: no memory for service %s\n", name);
-        return;
+        return nullptr;
     }
-    service_table[service_count++] = {tag, std::move(ep)};
+    service_table[service_count++] = {tag, ep};
+    return ep;
 }
 
 const service *services(size_t *count) {

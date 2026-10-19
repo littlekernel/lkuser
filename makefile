@@ -48,7 +48,8 @@ GLOBAL_CFLAGS := --std=gnu99 -Werror-implicit-function-declaration -Wstrict-prot
 GLOBAL_CPPFLAGS := -fno-exceptions -fno-rtti -fno-threadsafe-statics
 GLOBAL_ASMFLAGS := -DASSEMBLY
 GLOBAL_LDFLAGS :=
-GLOBAL_INCLUDES := -I$(NEWLIB_INC_DIR) -Isys/lib/lkuser/include -Ilib/lku/include
+# lib/lku's headers first: its <sys/dirent.h> stands in for newlib's
+GLOBAL_INCLUDES := -Ilib/lku/include -I$(NEWLIB_INC_DIR) -Isys/lib/lkuser/include
 GLOBAL_LIBS := $(LIBC) $(LIBM)
 
 GLOBAL_COMPILEFLAGS += -ffunction-sections -fdata-sections
@@ -166,7 +167,7 @@ endif
 
 # apps run in order by test-auto, each as name[:arg...]; each must print <NAME>: PASS
 # (upper-cased) and exit with code 0
-TEST_APPS ?= rawtest:a:b:c calltest
+TEST_APPS ?= rawtest:a:b:c calltest boottest posixtest
 TEST_TIMEOUT ?= 60
 TEST_SMP ?= 1
 

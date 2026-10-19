@@ -17,8 +17,15 @@
 
 namespace lkuser {
 
-lk::ref_ptr<endpoint> endpoint::create_kernel(const char *name, kernel_handler_t handler) {
-    return object::make<endpoint>(name, handler, 0u, 1u, uint64_t{0});
+lk::ref_ptr<endpoint> endpoint::create_kernel(const char *name, kernel_handler_t handler,
+                                              kernel_release_t release_hook) {
+    return object::make<endpoint>(name, handler, release_hook, 0u, 1u, uint64_t{0});
+}
+
+connection::~connection() {
+    if (ep_->release_hook()) {
+        ep_->release_hook()(cookie_);
+    }
 }
 
 status_t connect(proc *p, lk::ref_ptr<endpoint> ep, lk_handle_t *out) {
@@ -53,12 +60,43 @@ ssize_t kcall::write(size_t off, const void *buf, size_t len) {
     return n;
 }
 
+lk_status_t kcall::reply_handle(lk::ref_ptr<object> obj, uint32_t rights) {
+    if (pc_.nreply_handles == pc_.reply_handles_cap) {
+        return ERR_NOT_ENOUGH_BUFFER;
+    }
+    const object *o = obj.get();
+    lk_handle_t h;
+    status_t err = caller()->handles().add(std::move(obj), rights, &h);
+    if (err < 0) {
+        return err;
+    }
+    pc_.reply_handles[pc_.nreply_handles++] = {h, o};
+    return NO_ERROR;
+}
+
+namespace {
+
+// Takes back the handles a reply was to carry, when the call cannot deliver them.
+void drop_reply_handles(proc *p, pending_call &pc) {
+    for (size_t i = 0; i < pc.nreply_handles; i++) {
+        p->handles().close_if(pc.reply_handles[i].h, pc.reply_handles[i].obj);
+    }
+    pc.nreply_handles = 0;
+}
+
+} // namespace
+
 // Runs the handler of a kernel endpoint on the calling thread, then writes the reply header
-// at offset 0. The request has been checked and its prefix copied.
+// at offset 0. The request has been checked and its prefix copied. A refusal carries no
+// handles, so a client that ignores a failed reply leaks none.
 status_t call_kernel(thread *t, const connection &conn, pending_call &pc, const lk_msg_hdr &hdr) {
     pc.reply_len = 0;
+    pc.nreply_handles = 0;
     kcall c(t, conn, pc, hdr);
     const lk_status_t status = conn.ep()->handler()(c);
+    if (c.faulted_ || status < 0) {
+        drop_reply_handles(t->process(), pc);
+    }
     if (c.faulted_) {
         return ERR_FAULT;
     }
@@ -67,10 +105,11 @@ status_t call_kernel(thread *t, const connection &conn, pending_call &pc, const 
     const lk_msg_hdr reply = {
         .op = hdr.op,
         .len = static_cast<uint32_t>(written - sizeof(lk_msg_hdr)),
-        .nhandles = 0,
+        .nhandles = static_cast<uint32_t>(pc.nreply_handles),
         .status = status,
     };
     if (pc.reply.write(0, &reply, sizeof(reply)) != sizeof(reply)) {
+        drop_reply_handles(t->process(), pc);
         return ERR_FAULT;
     }
     pc.reply_len = written;
@@ -104,7 +143,7 @@ status_t sys_call(lk_handle_t conn_h, user_ptr<lk_call_args> uargs) {
     if (!ep->is_kernel()) {
         return ERR_NOT_SUPPORTED;
     }
-    // carrying handles: not yet
+    // carrying handles in a request: not yet
     if (args.nhandles > 0) {
         return ERR_NOT_SUPPORTED;
     }
@@ -139,14 +178,40 @@ status_t sys_call(lk_handle_t conn_h, user_ptr<lk_call_args> uargs) {
         return ERR_INVALID_ARGS;
     }
 
+    // Where the results go must be writable before the service runs, so a call that could
+    // not report them has no effects: reply_len, and the reply handles, cleared to
+    // LK_HANDLE_INVALID beyond those the reply carries.
+    const user_ptr<size_t> ureply_len(uargs.addr() + offsetof(lk_call_args, reply_len));
+    const user_ptr<lk_handle_t> ureply_handles(reinterpret_cast<vaddr_t>(args.reply_handles));
+    size_t reply_len = 0;
+    err = copy_to_user(aspace, ureply_len, &reply_len, sizeof(reply_len));
+    if (err < 0) {
+        return err;
+    }
+    lk_handle_t handles[LK_MSG_MAX_HANDLES] = {};
+    err = copy_to_user(aspace, ureply_handles, handles, args.reply_nhandles * sizeof(lk_handle_t));
+    if (err < 0) {
+        return err;
+    }
+    pc.reply_handles_cap = args.reply_nhandles;
+
     err = call_kernel(t, *conn, pc, hdr);
     if (err < 0) {
         return err;
     }
 
-    const size_t reply_len = pc.reply_len;
-    return copy_to_user(aspace, uargs.addr() + offsetof(lk_call_args, reply_len), &reply_len,
-                        sizeof(reply_len));
+    for (size_t i = 0; i < pc.nreply_handles; i++) {
+        handles[i] = pc.reply_handles[i].h;
+    }
+    reply_len = pc.reply_len;
+    err = copy_to_user(aspace, ureply_handles, handles, pc.nreply_handles * sizeof(lk_handle_t));
+    if (err == NO_ERROR) {
+        err = copy_to_user(aspace, ureply_len, &reply_len, sizeof(reply_len));
+    }
+    if (err < 0) {
+        drop_reply_handles(p, pc);
+    }
+    return err;
 }
 
 status_t sys_endpoint_create(user_ptr<const lk_endpoint_args> uargs, user_ptr<lk_handle_t> out) {
@@ -165,8 +230,8 @@ status_t sys_endpoint_create(user_ptr<const lk_endpoint_args> uargs, user_ptr<lk
         return ERR_NOT_SUPPORTED;
     }
 
-    lk::ref_ptr<endpoint> ep =
-        object::make<endpoint>(nullptr, nullptr, args.flags, args.max_active, args.cookie);
+    lk::ref_ptr<endpoint> ep = object::make<endpoint>(nullptr, nullptr, nullptr, args.flags,
+                                                      args.max_active, args.cookie);
     if (!ep) {
         return ERR_NO_MEMORY;
     }

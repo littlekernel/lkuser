@@ -85,15 +85,20 @@ status_t proc::create(int argc, const char *const *argv, lk::ref_ptr<proc> *out)
     size_t nservices;
     const service *svcs = services(&nservices);
     lk_proc_handle handles[kMaxServices];
+    size_t nhandles = 0;
     for (size_t i = 0; i < nservices; i++) {
-        handles[i].tag = svcs[i].tag;
-        status_t err = connect(p.get(), svcs[i].ep, &handles[i].handle);
+        if (svcs[i].tag == kNoTag) {
+            continue;
+        }
+        handles[nhandles].tag = svcs[i].tag;
+        status_t err = connect(p.get(), svcs[i].ep, &handles[nhandles].handle);
         if (err < 0) {
             return err;
         }
+        nhandles++;
     }
 
-    status_t err = p->build_args(argc, argv, handles, nservices);
+    status_t err = p->build_args(argc, argv, handles, nhandles);
     if (err < 0) {
         return err;
     }

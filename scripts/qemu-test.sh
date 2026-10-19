@@ -6,10 +6,11 @@
 # license that can be found in the LICENSE file or at
 # https://opensource.org/licenses/MIT
 #
-# Non-interactive boot test: boots the kernel with the FAT image attached, runs each app
-# through lk.autorun and powers off. Passes only when QEMU exits on its own, every app
-# printed "<APP>: PASS" (the name upper-cased), every app exited with code 0, and the
-# kernel never panicked. The console log is kept for inspection.
+# Non-interactive boot test: boots the kernel with a scratch copy of the FAT image attached
+# (the tests write to it, so every run starts from the image as built), runs each app through
+# lk.autorun and powers off. Passes only when QEMU exits on its own, every app printed
+# "<APP>: PASS" (the name upper-cased), every app exited with code 0, and the kernel never
+# panicked. The console log and the scratch image are kept for inspection.
 #
 # Each app is name[:arg...]: /bin/<name> runs with the arguments after it, so
 # "rawtest:a:b:c" runs "lkuser load /bin/rawtest a b c".
@@ -79,18 +80,21 @@ for app in "${apps[@]}"; do
     done
     autorun+="$load;lkuser+run;"
 done
-autorun+="poweroff"
+# unmounted so the scratch image is left clean for mtools and fsck.fat
+autorun+="unmount+/fs;poweroff"
 if [ ${#autorun} -gt 511 ]; then
     echo "$0: lk.autorun script is ${#autorun} bytes, over the 511 byte limit" >&2
     exit 2
 fi
 
 mkdir -p "$(dirname "$log")"
+scratch_fs="${log%.log}.fat"
+cp -- "$fsimage" "$scratch_fs" || exit 2
 echo "qemu-test: arch $arch, smp $smp, timeout ${timeout_secs}s, apps: ${apps[*]}"
 
 timeout --foreground "$timeout_secs" "${qemu[@]}" -m 512 -smp "$smp" -nographic \
     -kernel "$kernel" \
-    -drive if=none,file="$fsimage",id=blk,format=raw -device virtio-blk-device,drive=blk \
+    -drive if=none,file="$scratch_fs",id=blk,format=raw -device virtio-blk-device,drive=blk \
     -append "lk.autorun=$autorun" </dev/null 2>&1 | tee "$log"
 qemu_status=${PIPESTATUS[0]}
 

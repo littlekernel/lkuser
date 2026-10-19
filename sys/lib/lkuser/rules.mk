@@ -5,8 +5,9 @@ MODULE := $(LOCAL_DIR)
 GLOBAL_INCLUDES += $(LOCAL_DIR)/include
 
 # the kernel-resident services compiled in, one svc/<name>.cpp each; every process the
-# console starts is born with a connection to each
-LKUSER_SERVICES ?= console process time vm
+# console starts is born with a connection to each that has a startup tag (namespace needs
+# file, which has none: its connections come from namespace.OPEN)
+LKUSER_SERVICES ?= console process time vm namespace file
 
 MODULE_SRCS += $(LOCAL_DIR)/copy.cpp
 MODULE_SRCS += $(LOCAL_DIR)/endpoint.cpp

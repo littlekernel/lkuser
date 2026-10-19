@@ -27,8 +27,25 @@ void lk_thread_exit(void) __attribute__((noreturn));
 #include <sys/_syscalls.h>
 #undef LK_SYSCALL_DEF
 
-// One call with a contiguous request payload and reply buffer, the header filled in and
-// stripped off. Returns the call's status if it failed, else the service's; once a reply
+// A call described by its payloads: lk_msg_callv puts the request header in front and takes
+// the reply's off.
+struct lk_msg {
+    uint32_t op;
+    const struct lk_iov *req;   // the request payload, at most LK_IOV_MAX - 1 pieces
+    size_t nreq;
+    const struct lk_iov *reply; // where the reply payload goes, likewise
+    size_t nreply;
+    lk_handle_t *handles;       // room for the handles a reply carries
+    size_t handles_max;
+    size_t reply_len;           // out: the reply payload's length
+    uint32_t nhandles;          // out: the handles the reply carried, now in handles[]
+};
+
+// One call. Returns the call's status if it failed, else the service's; the out fields are
+// set once a reply arrived, whatever the service said.
+lk_status_t lk_msg_callv(lk_handle_t conn, struct lk_msg *m);
+
+// One call with a contiguous request payload and reply buffer, as lk_msg_callv. Once a reply
 // arrived, *reply_len (if not NULL) gets its payload length.
 lk_status_t lk_msg_call(lk_handle_t conn, uint32_t op, const void *req, size_t req_len,
                         void *reply, size_t reply_cap, size_t *reply_len);

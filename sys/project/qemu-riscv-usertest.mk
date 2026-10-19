@@ -5,6 +5,6 @@ MODULES += \
 WITH_ARCH_USPACE_TESTS := 0
 
 # the default services plus the echo test service
-LKUSER_SERVICES := console process time vm echo
+LKUSER_SERVICES := console process time vm namespace file echo
 
 include project/qemu-virt-riscv64-supervisor-test.mk

@@ -54,8 +54,8 @@ struct lk_call_args {
     size_t nhandles;
     const struct lk_iov *reply;
     size_t nreply;
-    lk_handle_t *reply_handles;
-    size_t reply_nhandles;
+    lk_handle_t *reply_handles; // room for the handles the reply carries, at most
+    size_t reply_nhandles;      // LK_MSG_MAX_HANDLES; LK_HANDLE_INVALID beyond those it did
     uint32_t handle_flags;
     uint64_t timeout_ns;
     size_t reply_len; // out: the furthest reply byte the service wrote, header included

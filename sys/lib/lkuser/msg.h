@@ -50,12 +50,23 @@ private:
 // the start of a request, copied before anything reads it, header included
 constexpr size_t kRecvPrefix = 256;
 
+class object;
+
 // The call a thread has in progress. Embedded in the calling thread, which owns it for its
 // lifetime.
 struct pending_call {
+    // a handle the reply gives the caller, already in its table
+    struct reply_handle {
+        lk_handle_t h;
+        const object *obj; // what h named when added, so undoing it closes nothing else
+    };
+
     msg_buffer req;
     msg_buffer reply;
     size_t reply_len = 0; // the furthest reply byte written, header included
+    reply_handle reply_handles[LK_MSG_MAX_HANDLES];
+    size_t nreply_handles = 0;
+    size_t reply_handles_cap = 0; // the caller's room for them
     uint8_t prefix[kRecvPrefix];
 };
 
