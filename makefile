@@ -33,8 +33,9 @@ BUILDDIR := build-$(ARCH)
 # the kernel's profile, the project sys/project/qemu-$(ARCH)-$(PROFILE).mk:
 #   usertest  every kernel service; the console loads the apps (the default)
 #   consoled  usertest with the console served from user space by /bin/consoled, from boot
+#   mini      the console and process services only, and one static app started at boot
 PROFILE ?= usertest
-PROFILES := usertest consoled
+PROFILES := usertest consoled mini
 LK_TESTPROJECT := qemu-$(ARCH)-$(PROFILE)
 
 # some newlib stuff
@@ -180,6 +181,7 @@ TEST_APPS_COMMON := rawtest:a:b:c calltest boottest posixtest spawntest faulttes
 TEST_APPS_usertest := $(TEST_APPS_COMMON) consoletest
 TEST_APPS_consoled := $(TEST_APPS_COMMON) consoletest:quit
 TEST_BOOT_consoled := consoled
+TEST_BOOT_mini := minitest
 TEST_APPS ?= $(TEST_APPS_$(PROFILE))
 TEST_BOOT ?= $(TEST_BOOT_$(PROFILE))
 TEST_TIMEOUT ?= 60
