@@ -137,7 +137,8 @@ struct pending_call : lk::list_hook<> {
     wait_queue_t idle; // the caller and other server threads, until busy clears
 };
 
-// An ABI timeout in LK's milliseconds, rounded up so a wait is never shorter than asked.
+// An ABI timeout in LK's milliseconds, long enough that a wait never ends before timeout_ns has
+// passed by the ns clock: rounded up, plus one for the truncated start. 0 stays 0.
 lk_time_t to_lk_time(uint64_t ns);
 
 } // namespace lkuser

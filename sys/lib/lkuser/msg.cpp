@@ -130,7 +130,12 @@ lk_time_t to_lk_time(uint64_t ns) {
     if (ns == LK_TIME_INFINITE) {
         return INFINITE_TIME;
     }
-    const uint64_t ms = ns / 1000000 + (ns % 1000000 != 0);
+    if (ns == 0) {
+        return 0;
+    }
+    // LK's timers count whole ms from a truncated now, so they can fire up to a ms early by
+    // the ns clock; the extra ms covers that
+    const uint64_t ms = ns / 1000000 + (ns % 1000000 != 0) + 1;
     return static_cast<lk_time_t>(MIN(ms, uint64_t{INFINITE_TIME - 1}));
 }
 
