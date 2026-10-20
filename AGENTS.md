@@ -4,7 +4,7 @@
 - LK (`lk/` submodule) for the kernel and base build system
 - newlib (`newlib/` submodule) as the user-space libc
 
-Treat `lk/` and `newlib/` as upstream submodules unless intentional submodule changes are required. `build-*` and `install-*` directories are generated output — never treat as source or commit files from them.
+Treat `lk/` and `newlib/` as upstream submodules unless intentional submodule changes are required. `lk/` follows LK's branch `lkuser` (the `branch` in `.gitmodules`), which carries the kernel changes the executive needs ahead of LK's master; a commit there is never rewritten, since lkuser pins it. `build-*` and `install-*` directories are generated output — never treat as source or commit files from them.
 
 ## Quick Commands
 

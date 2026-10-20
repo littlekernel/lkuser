@@ -1,6 +1,7 @@
 [submodule "lk"]
 	path = lk
 	url = https://github.com/littlekernel/lk.git
+	branch = lkuser
 [submodule "newlib"]
 	path = newlib
 	url = https://github.com/littlekernel/newlib.git
