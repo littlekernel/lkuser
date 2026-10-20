@@ -4,15 +4,20 @@ name: LKUSER CI
 
 on: [ push, pull_request ]
 
+# These jobs only build the tree; they never write back to the repo.
+permissions:
+  contents: read
+
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        toolchain-ver: [11.2.0]
+        toolchain-ver: [15.2.0, 11.3.0]
         arch:
           - riscv
+          - riscv32
 
     env:
       TOOLCHAIN_VER: ${{ matrix.toolchain-ver }}
@@ -23,50 +28,57 @@ jobs:
       run: |
         printf "Building with %d processors\n" "$(nproc)"
         grep -oP '(?<=model name\t: ).*' /proc/cpuinfo|head -n1
-        echo PROJECT = $PROJECT
         echo TOOLCHAIN_VER = $TOOLCHAIN_VER
         echo ARCH = $ARCH
 
     # check out the source
     - name: checkout source
-      uses: actions/checkout@v3
+      uses: actions/checkout@v6
       with:
         submodules: true
 
-    # compute the toolchain prefix this project will need
-    - name: compute toolchain
+    # compute the toolchains this arch needs: user space takes arch.mk's prefix and LK picks
+    # the kernel's own, so riscv32 needs riscv32-elf- beside its user space's riscv64-elf-.
+    # TOOLCHAIN_PREFIX is not exported, or it would override LK's choice.
+    - name: compute toolchains
       shell: bash
       run: |
-        TOOLCHAIN_PREFIX=$(make list-toolchain | grep TOOLCHAIN_PREFIX | tail -1 | cut -d ' ' -f 3)
-        echo "TOOLCHAIN_PREFIX=${TOOLCHAIN_PREFIX}" >> $GITHUB_ENV
-        echo "TOOLCHAIN=${TOOLCHAIN_PREFIX}${{ matrix.toolchain-ver }}-$(uname)-$(uname -m)" >> $GITHUB_ENV
+        PREFIXES=$(make list-toolchain | grep TOOLCHAIN_PREFIX | tail -1 | cut -d ' ' -f 3)
+        case "$ARCH" in
+          riscv32) PREFIXES="$PREFIXES riscv32-elf-" ;;
+        esac
+        TOOLCHAINS=
+        for p in $PREFIXES; do
+          TOOLCHAINS="$TOOLCHAINS ${p}${TOOLCHAIN_VER}-$(uname)-$(uname -m)"
+        done
+        echo "TOOLCHAINS=${TOOLCHAINS# }" >> $GITHUB_ENV
 
     # maintain a directory archives/ in the repo
     # it will contain tarballs of various toolchains
     - name: cache
-      uses: actions/cache@v2.1.1
+      uses: actions/cache@v5
       id: cache
       with:
         # A list of files, directories, and wildcard patterns to cache and restore
         path: archives
         # An explicit key for restoring and saving the cache
-        key: archives-${{ env.TOOLCHAIN }}
+        key: archives-${{ env.TOOLCHAINS }}
 
-    # download a toolchain from http://newos.org/toolchains
-    - name: fetch/extract toolchain
+    # download the toolchains from https://newos.org/toolchains
+    - name: fetch/extract toolchains
       shell: bash
       run: |
-        TOOLCHAIN_BASE_URL="http://newos.org/toolchains"
+        TOOLCHAIN_BASE_URL="https://newos.org/toolchains"
         TOOLCHAIN_SUFFIX="tar.xz"
-        TOOLCHAIN_ADDRESS="$TOOLCHAIN_BASE_URL/$TOOLCHAIN.$TOOLCHAIN_SUFFIX"
         mkdir -p archives
-        cd archives
-        echo "Downloading toolchain $TOOLCHAIN from $TOOLCHAIN_ADDRESS"
-        wget -v -N $TOOLCHAIN_ADDRESS || exit 1
-        cd ..
-        echo "Unpacking $TOOLCHAIN"
-        tar xf archives/$TOOLCHAIN.$TOOLCHAIN_SUFFIX || exit 1
-        echo "$GITHUB_WORKSPACE/$TOOLCHAIN/bin" >> $GITHUB_PATH
+        for TOOLCHAIN in $TOOLCHAINS; do
+          TOOLCHAIN_ADDRESS="$TOOLCHAIN_BASE_URL/$TOOLCHAIN.$TOOLCHAIN_SUFFIX"
+          echo "Downloading toolchain $TOOLCHAIN from $TOOLCHAIN_ADDRESS"
+          (cd archives && wget -v -N $TOOLCHAIN_ADDRESS) || exit 1
+          echo "Unpacking $TOOLCHAIN"
+          tar xf archives/$TOOLCHAIN.$TOOLCHAIN_SUFFIX || exit 1
+          echo "$GITHUB_WORKSPACE/$TOOLCHAIN/bin" >> $GITHUB_PATH
+        done
 
     # build it
     - name: build
