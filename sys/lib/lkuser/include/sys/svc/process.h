@@ -67,7 +67,7 @@ struct lk_process_spawn_req {
     uint32_t args_len; // their bytes, NULs included
     uint32_t tags[LK_MSG_MAX_HANDLES]; // the startup tag of each carried handle, nonzero, distinct
 };
-LK_ABI_ASSERT(sizeof(struct lk_process_spawn_req) == 32);
+LK_ABI_ASSERT(sizeof(struct lk_process_spawn_req) == 48);
 LK_ABI_ASSERT(offsetof(struct lk_process_spawn_req, flags) == 0);
 LK_ABI_ASSERT(offsetof(struct lk_process_spawn_req, path_len) == 4);
 LK_ABI_ASSERT(offsetof(struct lk_process_spawn_req, nargs) == 8);

@@ -31,7 +31,7 @@ LK_ABI_ASSERT(offsetof(struct lk_msg_hdr, status) == 12);
 #define LK_OP_KERNEL_BASE 0xffff0000u
 #define LK_OP_CONNECT     (LK_OP_KERNEL_BASE + 1) // a CONNECT_NOTIFY handshake
 
-#define LK_MSG_MAX_HANDLES 4 // handles carried by one request or reply
+#define LK_MSG_MAX_HANDLES 8 // handles carried by one request or reply
 #define LK_IOV_MAX         8 // iovecs on each side of a call
 
 // times in the ABI are nanoseconds; this one means no timeout
