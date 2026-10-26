@@ -178,4 +178,63 @@ extern "C" void riscv_user_kill(struct riscv_short_iframe *frame) {
     }
     lkuser::thread::exit_current();
 }
+
+#elif ARCH_ARM64
+#include <arch/arm64.h>
+
+// Number in x8, arguments in x0-x5, the status back in x0. elr already points past the svc.
+extern "C" void arm64_syscall(struct arm64_iframe_long *iframe, bool is_64bit) {
+    lkuser::thread *t = lkuser::thread::current();
+    // user space runs aarch64 only
+    if (!t || !is_64bit) {
+        arm64_syscall_unhandled(iframe, is_64bit);
+    }
+
+    // handlers block, take mutexes and copy user memory, none of which works with
+    // interrupts disabled
+    arch_enable_ints();
+    t->set_in_syscall(true);
+
+    const ulong regs[lkuser::kArgRegs] = {
+        iframe->r[0], iframe->r[1], iframe->r[2], iframe->r[3], iframe->r[4], iframe->r[5],
+    };
+    iframe->r[0] = static_cast<ulong>(lkuser::dispatch(iframe->r[8], regs));
+
+    // the way back to EL0 checks for a kill with interrupts disabled
+    t->set_in_syscall(false);
+    arch_disable_ints();
+}
+
+// Any other exception from EL0 ends the process with ERR_FAULT: this thread leaves now, the
+// others at their next way out of the kernel.
+extern "C" void arm64_user_exception(struct arm64_iframe_long *iframe, uint32_t esr,
+                                     uint64_t far) {
+    lkuser::thread *t = lkuser::thread::current();
+    if (!t) {
+        arm64_user_exception_unhandled(iframe, esr, far);
+    }
+
+    lkuser::proc *p = t->process();
+    printf("lkuser: process %u (%s) faulted: esr %#x, elr %#llx, far %#llx\n", p->pid(),
+           p->name(), esr, iframe->elr, far);
+
+    // exit takes mutexes, as the syscall path does
+    arch_enable_ints();
+    p->exit(ERR_FAULT);
+    lkuser::thread::exit_current();
+}
+
+// A killed thread on its way back to EL0, from a syscall, a fault or an interrupt: its
+// process has exited (exit, a fault or process.KILL), so the thread leaves too.
+extern "C" void arm64_user_kill() {
+    // exit_current takes mutexes
+    arch_enable_ints();
+    if (!lkuser::thread::current()) {
+        thread_exit(ERR_INTERRUPTED);
+    }
+    lkuser::thread::exit_current();
+}
+
+#else
+#error no syscall entry for this architecture
 #endif

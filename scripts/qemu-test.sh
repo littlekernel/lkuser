@@ -109,8 +109,11 @@ case $arch in
     riscv32)
         qemu=(qemu-system-riscv32 -machine virt -cpu rv32 -bios default)
         ;;
+    arm64)
+        qemu=(qemu-system-aarch64 -machine virt -cpu cortex-a76)
+        ;;
     *)
-        echo "$0: no automated test for ARCH=$arch (riscv and riscv32 only)" >&2
+        echo "$0: no automated test for ARCH=$arch (riscv, riscv32 and arm64 only)" >&2
         exit 2
         ;;
 esac

@@ -17,10 +17,17 @@
 
 // a syscall by number, bypassing the stubs
 static lk_status_t raw_syscall(unsigned long num) {
+#if ARCH_ARM64
+    register long x0 __asm__("x0") = 0;
+    register unsigned long x8 __asm__("x8") = num;
+    __asm__ volatile("svc #0" : "+r"(x0) : "r"(x8) : "memory");
+    return (lk_status_t)x0;
+#else
     register long a0 __asm__("a0") = 0;
     register unsigned long a7 __asm__("a7") = num;
     __asm__ volatile("ecall" : "+r"(a0) : "r"(a7) : "memory");
     return (lk_status_t)a0;
+#endif
 }
 
 static void test_startup_block(const struct lk_proc_args *args) {

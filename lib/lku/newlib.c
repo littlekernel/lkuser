@@ -197,7 +197,8 @@ int usleep(useconds_t useconds) {
 }
 
 // There is no wall clock: gettimeofday counts from boot. newlib declares clock_gettime and
-// nanosleep only on targets with _POSIX_TIMERS, which riscv64-elf is not, so they are absent.
+// nanosleep only on targets with _POSIX_TIMERS, which riscv64-elf and aarch64-elf are not, so
+// they are absent.
 int _gettimeofday(struct timeval *tv, void *tz) {
     if (lku_time == LK_HANDLE_INVALID) {
         return lku_fail(ERR_NOT_SUPPORTED);

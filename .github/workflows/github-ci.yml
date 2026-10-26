@@ -18,6 +18,7 @@ jobs:
         arch:
           - riscv
           - riscv32
+          - arm64
 
     env:
       TOOLCHAIN_VER: ${{ matrix.toolchain-ver }}

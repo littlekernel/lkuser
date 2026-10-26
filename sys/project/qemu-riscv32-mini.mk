@@ -1,4 +1,3 @@
-# The mini profile on riscv32: the riscv64 project's knobs over LK's sv32 supervisor project.
+# The mini profile on riscv32, LK's sv32 supervisor kernel.
 LKUSER_LK_PROJECT := project/qemu-virt-riscv32-supervisor-test.mk
-
-include project/qemu-riscv-mini.mk
+include project/profile/mini.mk

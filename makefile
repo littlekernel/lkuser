@@ -177,6 +177,8 @@ else ifeq ($(ARCH),riscv)
 	qemu-system-riscv64 -m 512 -smp 1 -machine virt -cpu rv64 -bios default -kernel build-$(LK_TESTPROJECT)/lk.elf -nographic -drive if=none,file=$(BUILDDIR)/root.fat,id=blk,format=raw -device virtio-blk-device,drive=blk
 else ifeq ($(ARCH),riscv32)
 	qemu-system-riscv32 -m 512 -smp 1 -machine virt -cpu rv32 -bios default -kernel build-$(LK_TESTPROJECT)/lk.elf -nographic -drive if=none,file=$(BUILDDIR)/root.fat,id=blk,format=raw -device virtio-blk-device,drive=blk
+else ifeq ($(ARCH),arm64)
+	qemu-system-aarch64 -m 512 -smp 1 -machine virt -cpu cortex-a76 -kernel build-$(LK_TESTPROJECT)/lk.elf -nographic -drive if=none,file=$(BUILDDIR)/root.fat,id=blk,format=raw -device virtio-blk-device,drive=blk
 endif
 
 # apps run in order by test-auto, each as name[:arg...][&][=code]; each must exit with code

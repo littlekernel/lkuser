@@ -34,6 +34,10 @@ namespace {
 
 uint32_t next_tid = 1;
 
+// A user thread's kernel stack: SPAWN reads the image through the file system and block
+// drivers on it, which takes more than the one page arm64 gives a thread by default.
+constexpr size_t kKernelStackSize = MAX(DEFAULT_STACK_SIZE, 8192ul);
+
 } // namespace
 
 thread::thread(proc *p, vaddr_t entry, vaddr_t sp)
@@ -72,7 +76,7 @@ status_t thread::create(proc *p, vaddr_t entry, vaddr_t sp, lk::ref_ptr<thread> 
 
 status_t thread::create_lk_thread() {
     if (!thread_create_etc(&lkthread_, proc_->name(), &start_routine, this, LOW_PRIORITY,
-                           nullptr, DEFAULT_STACK_SIZE)) {
+                           nullptr, kKernelStackSize)) {
         return ERR_NO_MEMORY;
     }
     // the LK thread runs in the process's address space from its first instruction

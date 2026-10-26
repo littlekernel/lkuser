@@ -17,7 +17,11 @@
 set -eu
 
 project=${1:-qemu-riscv-usertest}
-size=${TOOLCHAIN_PREFIX:-riscv64-elf-}size
+case $project in
+    qemu-arm64-*) prefix=aarch64-elf- ;;
+    *) prefix=riscv64-elf- ;;
+esac
+size=${TOOLCHAIN_PREFIX:-$prefix}size
 jobs=$(nproc)
 
 PROJECT=$project make -f makefile.lk -j"$jobs" >/dev/null

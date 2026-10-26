@@ -26,8 +26,9 @@
 // the kernel's dispatcher (syscalls.cpp), after <sys/lk_msg.h>; both sides expand the same
 // rows, so numbers and signatures cannot skew.
 //
-// Trap ABI (riscv): number in a7, arguments in a0-a5, the result in a0, LK's NO_ERROR or a
-// negative ERR_*. Arguments follow the argument-width rule of <sys/lk_abi.h>: each fits one
+// Trap ABI: on riscv (ecall) number in a7, arguments in a0-a5, the result in a0; on arm64
+// (svc #0) number in x8, arguments in x0-x5, the result in x0. The result is LK's NO_ERROR or
+// a negative ERR_*. Arguments follow the argument-width rule of <sys/lk_abi.h>: each fits one
 // register today, and times travel in the argument structures. A number past the end of the
 // table returns ERR_NOT_SUPPORTED.
 

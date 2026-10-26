@@ -23,6 +23,25 @@
 #include <sys/_syscalls.h>
 #undef LK_SYSCALL_DEF
 
+#elif ARCH_ARM64
+
+// gcc has no naked functions on aarch64, so each stub is plain assembly, in a section of its
+// own for --gc-sections. The arguments are already in x0-x5 where the calling convention put
+// them; the number goes in x8 and the status comes back in x0.
+#define LK_SYSCALL_DEF(n, ret, name, args...) \
+    __asm__(".pushsection .text.lk_" #name ", \"ax\", %progbits\n" \
+            ".globl lk_" #name "\n" \
+            ".type lk_" #name ", %function\n" \
+            ".balign 4\n" \
+            "lk_" #name ":\n" \
+            "    mov x8, #" #n "\n" \
+            "    svc #0\n" \
+            "    ret\n" \
+            ".size lk_" #name ", . - lk_" #name "\n" \
+            ".popsection\n");
+#include <sys/_syscalls.h>
+#undef LK_SYSCALL_DEF
+
 #else
 #error no syscall stubs for this architecture
 #endif
