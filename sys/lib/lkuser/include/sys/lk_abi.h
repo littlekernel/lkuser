@@ -93,8 +93,8 @@ LK_ABI_ASSERT(offsetof(struct lk_proc_handle, handle) == 4);
 
 // A process the kernel starts at boot to serve one of the services above (LKUSER_BOOT's
 // path@service) is born with the endpoint it serves under this tag (RECV CONNECT WAIT DUP
-// TRANSFER), and every process made after it gets a connection to that endpoint under the
-// service's tag in place of the kernel's.
+// TRANSFER), and every process the kernel makes after it gets a connection to that endpoint
+// under the service's tag in place of the kernel's.
 #define LK_TAG_SERVE_ENDPOINT 0x100u
 
 // tags from here up name test services, present only in builds that compile them in

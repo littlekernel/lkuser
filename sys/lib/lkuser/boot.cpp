@@ -51,7 +51,8 @@ char *next_field(char **s, char sep) {
 
 // One LKUSER_BOOT entry, path[:arg...][@service], in text (cut up in place): its process made
 // and loaded, not started. With @service the process is born with a new endpoint under
-// LK_TAG_SERVE_ENDPOINT, and the service points at that endpoint for every process made later.
+// LK_TAG_SERVE_ENDPOINT, and the service points at that endpoint for every process the kernel
+// makes later.
 status_t make_one(char *text, boot_proc *out) {
     char *service = strchr(text, '@');
     if (service) {

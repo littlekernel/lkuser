@@ -9,9 +9,9 @@
 // The console protocol of <sys/svc/console.h> served from user space, relaying to the kernel
 // console. It runs as a boot process serving the console (LKUSER_BOOT's /bin/consoled@console):
 // born with the endpoint it serves under LK_TAG_SERVE_ENDPOINT and its own connection to the
-// kernel console under LK_TAG_CONSOLE, while every process made after it gets a connection to
-// it under LK_TAG_CONSOLE. Its clients cannot tell it from the kernel's: it answers every
-// request as svc/console.cpp does.
+// kernel console under LK_TAG_CONSOLE, while every process the kernel makes after it gets a
+// connection to it under LK_TAG_CONSOLE (and may hand it down as it spawns). Its clients cannot
+// tell it from the kernel's: it answers every request as svc/console.cpp does.
 //
 // One thread serves every call. A READ is answered later, by token: a second thread reads a
 // line from the kernel console only while a READ waits, and hands it over through a call on an

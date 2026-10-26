@@ -40,8 +40,8 @@ constexpr uint32_t kNoTag = 0;
 lk::ref_ptr<endpoint> register_service(uint32_t tag, const char *name, kernel_handler_t handler,
                                        kernel_release_t release_hook = nullptr);
 
-// Points the service called name at ep, a user endpoint, so that every process made from now
-// on is born connected to ep under the service's tag, which goes to *tag. Called by the boot
+// Points the service called name at ep, a user endpoint, so that every process the kernel makes
+// from now on is born connected to ep under the service's tag, which goes to *tag. Called by the boot
 // hook before it starts any process. ERR_NOT_FOUND for no such service, ERR_INVALID_ARGS for one
 // with no tag or one already served.
 status_t serve_service(const char *name, lk::ref_ptr<endpoint> ep, uint32_t *tag);

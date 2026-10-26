@@ -138,8 +138,7 @@ static void test_ipc(void) {
 static void test_no_fs(const char *self) {
     const char *argv[] = {self};
     lk_handle_t child = LK_HANDLE_INVALID;
-    CHECK_EQ(lk_process_spawn(process_h, self, 1, argv, LK_PROCESS_SPAWN_SERVICES, NULL, NULL, 0,
-                              &child, NULL),
+    CHECK_EQ(lk_process_spawn(process_h, self, 1, argv, 0, NULL, NULL, 0, &child, NULL),
              ERR_NOT_FOUND);
     CHECK_EQ(child, LK_HANDLE_INVALID);
     say("MINITEST: no file system ok\n");

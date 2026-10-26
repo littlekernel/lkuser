@@ -55,9 +55,9 @@ public:
 
     // A process with an empty address space and a startup block carrying argv (argv[0] is the
     // image path) and its startup handles: a connection to every kernel service with a tag if
-    // services is set, then extra, an extra handle replacing a service's under the same tag.
-    // Nothing runs until start().
-    static status_t create(int argc, const char *const *argv, bool services,
+    // kernel_services is set (the processes the kernel makes itself, at boot and from the
+    // console), then extra. Nothing runs until start().
+    static status_t create(int argc, const char *const *argv, bool kernel_services,
                            const startup_handle *extra, size_t nextra, lk::ref_ptr<proc> *out);
 
     // Starts the main thread at entry, on a new stack whose top holds the startup block.

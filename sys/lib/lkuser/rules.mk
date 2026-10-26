@@ -12,8 +12,8 @@ LKUSER_SERVICES ?= console process time vm namespace file
 # Processes started at boot, before the shell, in order: path[:arg...][@service] each, the path
 # on the LKUSER_BOOT_FS file system on LKUSER_BOOT_DEV, which is mounted read-only while they
 # load and unmounted before any starts. With @service the process serves that service in the
-# kernel's place: it is born with an endpoint under LK_TAG_SERVE_ENDPOINT, and every process made
-# after it is born connected to that endpoint under the service's tag.
+# kernel's place: it is born with an endpoint under LK_TAG_SERVE_ENDPOINT, and every process the
+# kernel makes after it is born connected to that endpoint under the service's tag.
 LKUSER_BOOT ?=
 LKUSER_BOOT_FS ?= fat
 LKUSER_BOOT_DEV ?= virtio0

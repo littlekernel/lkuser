@@ -7,11 +7,11 @@
  */
 
 // Processes and threads with no libc: spawning /bin/child with arguments and handles, waiting
-// for it and reading its exit code, every way a process ends (exit, thread_exit, a fault, a
-// kill, from one thread or several), killing a child blocked in a sleep, a console read or a
-// wait, the rights a process handle carries, the requests the process service refuses, and
-// threads of its own. Prints SPAWNTEST: PASS; each failed check prints a SPAWNTEST: FAIL line
-// and the exit code is 1.
+// for it and reading its exit code, a child born with only the handles handed to it and their
+// rights, every way a process ends (exit, thread_exit, a fault, a kill, from one thread or
+// several), killing a child blocked in a sleep, a console read or a wait, the rights a process
+// handle carries, the requests the process service refuses, and threads of its own. Prints
+// SPAWNTEST: PASS; each failed check prints a SPAWNTEST: FAIL line and the exit code is 1.
 
 #define TEST_NAME "SPAWNTEST"
 #include <lk/services.h>
@@ -24,7 +24,7 @@
 // no table has this many slots
 #define NOT_A_HANDLE 0xffffffffu
 
-static lk_handle_t console_h, process_h, vm_h, time_h;
+static lk_handle_t console_h, process_h, vm_h, time_h, ns_h;
 
 static void say(const char *s) {
     CHECK_EQ(lk_console_write(console_h, s, test_strlen(s)), NO_ERROR);
@@ -36,12 +36,17 @@ static uint64_t now_ns(void) {
     return ns;
 }
 
-// /bin/child <mode> [arg], born connected to the kernel services and with handles under tags
+// /bin/child <mode> [arg], handed the services its modes use and hs[] under tags[]
 static lk_status_t spawn(const char *mode, const char *arg, const lk_handle_t *hs,
-                         const uint32_t *tags, size_t n, lk_handle_t *child) {
+                         const uint32_t *tags, size_t n, lk_handle_t *child, uint32_t *pid) {
     const char *argv[] = {CHILD, mode, arg};
-    return lk_process_spawn(process_h, CHILD, arg ? 3 : 2, argv, LK_PROCESS_SPAWN_SERVICES, hs,
-                            tags, n, child, NULL);
+    const struct test_handoff down[] = {
+        {process_h, LK_TAG_PROCESS, LK_RIGHTS_ALL},
+        {time_h, LK_TAG_TIME, LK_RIGHTS_ALL},
+        {console_h, LK_TAG_CONSOLE, LK_RIGHTS_ALL},
+        {vm_h, LK_TAG_VM, LK_RIGHTS_ALL},
+    };
+    return test_spawn(process_h, CHILD, arg ? 3 : 2, argv, down, 4, hs, tags, n, child, pid);
 }
 
 // Waits for the process to end, then returns its exit code.
@@ -58,7 +63,7 @@ static int wait_exit(lk_handle_t p) {
 // child <mode>, run to its end: its exit code
 static int run(const char *mode) {
     lk_handle_t p = LK_HANDLE_INVALID;
-    CHECK_EQ(spawn(mode, NULL, NULL, NULL, 0, &p), NO_ERROR);
+    CHECK_EQ(spawn(mode, NULL, NULL, NULL, 0, &p, NULL), NO_ERROR);
     const int code = wait_exit(p);
     CHECK_EQ(lk_handle_close(p), NO_ERROR);
     return code;
@@ -69,10 +74,12 @@ static void test_startup(const struct lk_proc_args *args) {
     process_h = lk_proc_args_find(args, LK_TAG_PROCESS);
     vm_h = lk_proc_args_find(args, LK_TAG_VM);
     time_h = lk_proc_args_find(args, LK_TAG_TIME);
+    ns_h = lk_proc_args_find(args, LK_TAG_NAMESPACE);
     CHECK(console_h != LK_HANDLE_INVALID);
     CHECK(process_h != LK_HANDLE_INVALID);
     CHECK(vm_h != LK_HANDLE_INVALID);
     CHECK(time_h != LK_HANDLE_INVALID);
+    CHECK(ns_h != LK_HANDLE_INVALID);
     test_check_failures();
 }
 
@@ -89,10 +96,7 @@ static void test_memobj_child(void) {
     // moved to the child, so it goes from here; the parent keeps the original
     CHECK_EQ(lk_handle_dup(m, LK_RIGHTS_ALL, &dup), NO_ERROR);
     const uint32_t tag = LK_TAG_USER_BASE;
-    const char *argv[] = {CHILD, "memobj", "hello from the child"};
-    CHECK_EQ(lk_process_spawn(process_h, CHILD, 3, argv, LK_PROCESS_SPAWN_SERVICES, &dup, &tag, 1,
-                              &p, &pid),
-             NO_ERROR);
+    CHECK_EQ(spawn("memobj", "hello from the child", &dup, &tag, 1, &p, &pid), NO_ERROR);
     CHECK_EQ(lk_handle_close(dup), ERR_BAD_HANDLE);
     CHECK_EQ(wait_exit(p), 7);
     CHECK(va && test_streq(va, "hello from the child"));
@@ -101,13 +105,12 @@ static void test_memobj_child(void) {
     CHECK_EQ(info.pid, pid);
     CHECK_EQ(lk_handle_close(p), NO_ERROR);
 
-    // without LK_PROCESS_SPAWN_SERVICES: a vm connection and the memory object, nothing else
-    lk_handle_t hs[2];
-    const uint32_t tags[2] = {LK_TAG_VM, LK_TAG_USER_BASE};
-    CHECK_EQ(lk_handle_dup(vm_h, LK_RIGHTS_ALL, &hs[0]), NO_ERROR);
-    CHECK_EQ(lk_handle_dup(m, LK_RIGHTS_ALL, &hs[1]), NO_ERROR);
+    // a vm connection and the memory object, nothing else
+    const struct test_handoff vm_only = {vm_h, LK_TAG_VM, LK_RIGHTS_ALL};
+    CHECK_EQ(lk_handle_dup(m, LK_RIGHTS_ALL, &dup), NO_ERROR);
     const char *bare_argv[] = {CHILD, "bare"};
-    CHECK_EQ(lk_process_spawn(process_h, CHILD, 2, bare_argv, 0, hs, tags, 2, &p, NULL), NO_ERROR);
+    CHECK_EQ(test_spawn(process_h, CHILD, 2, bare_argv, &vm_only, 1, &dup, &tag, 1, &p, NULL),
+             NO_ERROR);
     CHECK_EQ(wait_exit(p), 9);
     CHECK(va && test_streq(va, "bare"));
     CHECK_EQ(lk_handle_close(p), NO_ERROR);
@@ -115,6 +118,51 @@ static void test_memobj_child(void) {
     CHECK_EQ(lk_vm_unmap(vm_h, va), NO_ERROR);
     CHECK_EQ(lk_handle_close(m), NO_ERROR);
     say("SPAWNTEST: memory object child ok\n");
+}
+
+// child count, handed down[] and n dups of a memory object: its exit code
+static int count_handles(const struct test_handoff *down, size_t ndown, size_t n) {
+    lk_handle_t m, hs[LK_MSG_MAX_HANDLES];
+    uint32_t tags[LK_MSG_MAX_HANDLES];
+    CHECK_EQ(lk_vm_memobj_create(vm_h, PAGE, 0, &m, NULL), NO_ERROR);
+    for (size_t i = 0; i < n; i++) {
+        CHECK_EQ(lk_handle_dup(m, LK_RIGHTS_ALL, &hs[i]), NO_ERROR);
+        tags[i] = LK_TAG_USER_BASE + i;
+    }
+    CHECK_EQ(lk_handle_close(m), NO_ERROR);
+    const char *argv[] = {CHILD, "count"};
+    lk_handle_t p = LK_HANDLE_INVALID;
+    CHECK_EQ(test_spawn(process_h, CHILD, 2, argv, down, ndown, hs, tags, n, &p, NULL),
+             NO_ERROR);
+    const int code = wait_exit(p);
+    CHECK_EQ(lk_handle_close(p), NO_ERROR);
+    return code;
+}
+
+// A child is born with what it is handed and nothing else: no service comes with a spawn, and
+// a handed-down dup keeps the rights it was made with.
+static void test_handed_down(void) {
+    const struct test_handoff services[] = {
+        {process_h, LK_TAG_PROCESS, LK_RIGHTS_ALL},
+        {vm_h, LK_TAG_VM, LK_RIGHTS_ALL},
+        {time_h, LK_TAG_TIME, LK_RIGHTS_ALL},
+        {console_h, LK_TAG_CONSOLE, LK_RIGHTS_ALL},
+        {ns_h, LK_TAG_NAMESPACE, LK_RIGHTS_ALL},
+    };
+    CHECK_EQ(count_handles(NULL, 0, 0), 100);
+    CHECK_EQ(count_handles(&services[3], 1, 0), 101);
+    CHECK_EQ(count_handles(services, 5, 1), 106);
+    CHECK_EQ(count_handles(services, 5, LK_MSG_MAX_HANDLES - 5), 100 + LK_MSG_MAX_HANDLES);
+
+    const struct test_handoff no_impulse = {console_h, LK_TAG_CONSOLE,
+                                            LK_RIGHTS_ALL & ~LK_RIGHT_IMPULSE};
+    const char *argv[] = {CHILD, "impulse"};
+    lk_handle_t p = LK_HANDLE_INVALID;
+    CHECK_EQ(test_spawn(process_h, CHILD, 2, argv, &no_impulse, 1, NULL, NULL, 0, &p, NULL),
+             NO_ERROR);
+    CHECK_EQ(wait_exit(p), ERR_ACCESS_DENIED);
+    CHECK_EQ(lk_handle_close(p), NO_ERROR);
+    say("SPAWNTEST: handed down ok\n");
 }
 
 // every way out, with one thread or several
@@ -131,7 +179,7 @@ static void test_exits(void) {
 // A child blocked in mode is killed, and ends at once with LK_PROCESS_KILLED.
 static void kill_blocked(const char *mode) {
     lk_handle_t p = LK_HANDLE_INVALID, weak;
-    CHECK_EQ(spawn(mode, NULL, NULL, NULL, 0, &p), NO_ERROR);
+    CHECK_EQ(spawn(mode, NULL, NULL, NULL, 0, &p, NULL), NO_ERROR);
 
     // still running a while later
     uint32_t sig = 1;
@@ -176,7 +224,7 @@ static lk_status_t spawn_carrying(lk_handle_t h, uint32_t flags, uint32_t tag) {
     const char *path = CHILD;
     const char args[] = CHILD "\0thread_exit";
     struct lk_process_spawn_req req = {
-        .flags = LK_PROCESS_SPAWN_SERVICES,
+        .flags = 0,
         .path_len = sizeof(CHILD) - 1,
         .nargs = 2,
         .args_len = sizeof(args),
@@ -212,11 +260,13 @@ static void test_spawn_refused(void) {
     CHECK(lk_process_spawn(process_h, "/data/posixtest.txt", 2, argv, 0, NULL, NULL, 0, &p,
                            NULL) < 0);
     // ".." stops at the root
-    CHECK_EQ(lk_process_spawn(process_h, "/../bin/child", 2, argv, LK_PROCESS_SPAWN_SERVICES,
-                              NULL, NULL, 0, &p, NULL),
+    CHECK_EQ(lk_process_spawn(process_h, "/../bin/child", 2, argv, 0, NULL, NULL, 0, &p, NULL),
              NO_ERROR);
     CHECK_EQ(wait_exit(p), 0);
     CHECK_EQ(lk_handle_close(p), NO_ERROR);
+    // no flag is defined
+    CHECK_EQ(lk_process_spawn(process_h, CHILD, 2, argv, 1, NULL, NULL, 0, &p, NULL),
+             ERR_INVALID_ARGS);
 
     // carried handles: moved, under a nonzero tag; a refusal leaves them here
     CHECK_EQ(lk_handle_dup(console_h, LK_RIGHTS_ALL, &h), NO_ERROR);
@@ -232,7 +282,7 @@ static void test_spawn_refused(void) {
     CHECK_EQ(lk_process_spawn(process_h, CHILD, 2, argv, 0, two, same_tags, 2, &p, NULL),
              ERR_INVALID_ARGS);
     CHECK_EQ(lk_handle_close(two[0]), NO_ERROR);
-    // a spawn that goes through takes it; a console handle in place of the service's
+    // a spawn that goes through takes it, under a service's tag as under any other
     CHECK_EQ(spawn_carrying(h, 0, LK_TAG_CONSOLE), NO_ERROR);
     CHECK_EQ(lk_handle_close(h), ERR_BAD_HANDLE);
 
@@ -301,6 +351,7 @@ void _start_c(const struct lk_proc_args *args) {
 
     test_startup(args);
     test_memobj_child();
+    test_handed_down();
     test_exits();
     test_kill();
     test_spawn_refused();

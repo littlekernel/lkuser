@@ -88,7 +88,7 @@ proc::~proc() {
     }
 }
 
-status_t proc::create(int argc, const char *const *argv, bool services,
+status_t proc::create(int argc, const char *const *argv, bool kernel_services,
                       const startup_handle *extra, size_t nextra, lk::ref_ptr<proc> *out) {
     if (argc < 1 || nextra > LK_MSG_MAX_HANDLES) {
         return ERR_INVALID_ARGS;
@@ -106,15 +106,11 @@ status_t proc::create(int argc, const char *const *argv, bool services,
 
     lk_proc_handle handles[kMaxServices + LK_MSG_MAX_HANDLES];
     size_t nhandles = 0;
-    if (services) {
+    if (kernel_services) {
         size_t nservices;
         const service *svcs = lkuser::services(&nservices);
         for (size_t i = 0; i < nservices; i++) {
-            bool replaced = false;
-            for (size_t j = 0; j < nextra; j++) {
-                replaced |= extra[j].tag == svcs[i].tag;
-            }
-            if (svcs[i].tag == kNoTag || replaced) {
+            if (svcs[i].tag == kNoTag) {
                 continue;
             }
             handles[nhandles].tag = svcs[i].tag;

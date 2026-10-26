@@ -131,8 +131,8 @@ lk_status_t split_args(char *buf, size_t len, uint32_t nargs, const char **argv)
 }
 
 // Everything is read and checked, the child made and loaded and the parent's handle to it
-// installed before the child runs, so a refusal starts nothing. The carried handles go into the
-// child's table now and leave the caller's once this returns success.
+// installed before the child runs, so a refusal starts nothing. The carried handles, all the
+// child is born with, go into its table now and leave the caller's once this returns success.
 lk_status_t process_spawn(kcall &c) {
     lk_process_spawn_req req;
     if (c.len() < sizeof(req)) {
@@ -142,7 +142,7 @@ lk_status_t process_spawn(kcall &c) {
     if (n < 0) {
         return static_cast<lk_status_t>(n);
     }
-    if ((req.flags & ~LK_PROCESS_SPAWN_SERVICES) || req.nargs == 0 || req.nargs > kMaxArgs ||
+    if (req.flags != 0 || req.nargs == 0 || req.nargs > kMaxArgs ||
         req.args_len > kMaxArgsLen ||
         c.len() - sizeof(req) != uint64_t{req.path_len} + req.args_len) {
         return ERR_INVALID_ARGS;
@@ -216,8 +216,7 @@ lk_status_t process_spawn(kcall &c) {
     }
 
     lk::ref_ptr<proc> child;
-    err = proc::create(req.nargs, argv, req.flags & LK_PROCESS_SPAWN_SERVICES, extra, nextra,
-                       &child);
+    err = proc::create(req.nargs, argv, false, extra, nextra, &child);
     if (err < 0) {
         return err;
     }

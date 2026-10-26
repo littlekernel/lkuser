@@ -198,14 +198,23 @@ static lk_status_t write_at(lk_token_t t, size_t off, const void *buf, size_t le
     return lk_msg_write(t, off, &iov, 1);
 }
 
-// /bin/child <mode>, born with the kernel services and h under LK_TAG_USER_BASE, moved
-static lk_handle_t spawn_child(const char *mode, lk_handle_t h, uint32_t *pid) {
+// /bin/child <mode>, handed the services its modes use and h under tag, moved: the status
+static lk_status_t spawn_with(const char *mode, lk_handle_t h, uint32_t tag, lk_handle_t *p,
+                              uint32_t *pid) {
     const char *argv[] = {CHILD, mode};
-    const uint32_t tag = LK_TAG_USER_BASE;
+    const struct test_handoff down[] = {
+        {process_h, LK_TAG_PROCESS, LK_RIGHTS_ALL},
+        {time_h, LK_TAG_TIME, LK_RIGHTS_ALL},
+        {console_h, LK_TAG_CONSOLE, LK_RIGHTS_ALL},
+        {vm_h, LK_TAG_VM, LK_RIGHTS_ALL},
+    };
+    return test_spawn(process_h, CHILD, 2, argv, down, 4, &h, &tag, 1, p, pid);
+}
+
+// /bin/child <mode>, with h under LK_TAG_USER_BASE
+static lk_handle_t spawn_child(const char *mode, lk_handle_t h, uint32_t *pid) {
     lk_handle_t p = LK_HANDLE_INVALID;
-    CHECK_EQ(lk_process_spawn(process_h, CHILD, 2, argv, LK_PROCESS_SPAWN_SERVICES, &h, &tag, 1,
-                              &p, pid),
-             NO_ERROR);
+    CHECK_EQ(spawn_with(mode, h, LK_TAG_USER_BASE, &p, pid), NO_ERROR);
     return p;
 }
 
@@ -804,16 +813,13 @@ static void test_groups(void) {
 
 static void test_exit_notify(void) {
     const lk_handle_t ep = endpoint(0, 1, 0);
-    const char *argv[] = {CHILD, "fault"};
     const uint32_t tag = LK_PROCESS_SPAWN_TAG_EXIT_NOTIFY;
     lk_handle_t notify = connection(ep);
     lk_handle_t p = LK_HANDLE_INVALID;
     uint32_t pid = 0;
 
     // the connection stays with the kernel, not the child, until the child has ended
-    CHECK_EQ(lk_process_spawn(process_h, CHILD, 2, argv, LK_PROCESS_SPAWN_SERVICES, &notify, &tag,
-                              1, &p, &pid),
-             NO_ERROR);
+    CHECK_EQ(spawn_with("fault", notify, tag, &p, &pid), NO_ERROR);
     CHECK_EQ(lk_handle_close(notify), ERR_BAD_HANDLE);
     CHECK_EQ(child_exit(p), ERR_FAULT);
     struct lk_impulse imp = next_impulse(ep, 5 * SEC);
@@ -828,14 +834,10 @@ static void test_exit_notify(void) {
     // a connection with IMPULSE, to a user endpoint
     const lk_handle_t c = connection(ep);
     notify = without(c, LK_RIGHT_IMPULSE);
-    CHECK_EQ(lk_process_spawn(process_h, CHILD, 2, argv, LK_PROCESS_SPAWN_SERVICES, &notify, &tag,
-                              1, &p, NULL),
-             ERR_ACCESS_DENIED);
+    CHECK_EQ(spawn_with("fault", notify, tag, &p, NULL), ERR_ACCESS_DENIED);
     CHECK_EQ(lk_handle_close(notify), NO_ERROR);
     notify = without(time_h, 0);
-    CHECK_EQ(lk_process_spawn(process_h, CHILD, 2, argv, LK_PROCESS_SPAWN_SERVICES, &notify, &tag,
-                              1, &p, NULL),
-             ERR_NOT_SUPPORTED);
+    CHECK_EQ(spawn_with("fault", notify, tag, &p, NULL), ERR_NOT_SUPPORTED);
     CHECK_EQ(lk_handle_close(notify), NO_ERROR);
     CHECK_EQ(lk_handle_close(c), NO_ERROR);
     next_impulse(ep, 0);

@@ -34,8 +34,9 @@ lk_status_t lk_process_info(lk_handle_t process, struct lk_process_info *info);
 lk_status_t lk_process_info_of(lk_handle_t process, lk_handle_t proc, struct lk_process_info *info);
 // ends every thread of proc (lent); it exits with LK_PROCESS_KILLED
 lk_status_t lk_process_kill(lk_handle_t process, lk_handle_t proc);
-// /path as argv[0..argc), flags LK_PROCESS_SPAWN_*. The child is born with handles[i] under
-// tags[i], moved out of this process. *child (if not NULL) gets a handle to it, *pid its pid.
+// /path as argv[0..argc), flags 0 (none defined yet). The child is born with handles[i] under
+// tags[i], moved out of this process, and nothing else. *child (if not NULL) gets a handle to
+// it, *pid its pid.
 lk_status_t lk_process_spawn(lk_handle_t process, const char *path, int argc,
                              const char *const *argv, uint32_t flags, const lk_handle_t *handles,
                              const uint32_t *tags, size_t nhandles, lk_handle_t *child,

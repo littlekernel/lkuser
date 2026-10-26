@@ -7,10 +7,14 @@
  */
 
 // The process spawntest spawns, with no libc: argv[1] says how it is to end, and the exit code
-// says it got there. Anything unexpected prints a CHILD: FAIL line and exits 1.
+// says it got there. It is born with only the handles its spawner passed. Anything unexpected
+// prints a CHILD: FAIL line through debug_write, which needs no handle, and exits 1.
 //
+//   count           exits with 100 plus the number of handles it was born with
+//   impulse         sends an impulse on its console connection, exits with the status
 //   memobj <text>   writes <text> into the memory object under LK_TAG_USER_BASE, exits 7
-//   bare            born with that memory object and nothing else; writes "bare", exits 9
+//   bare            born with a vm connection and that memory object only; writes "bare",
+//                   exits 9
 //   thread_exit     leaves by thread_exit from its only thread: exit code 0
 //   fault           stores to an unmapped address: ERR_FAULT
 //   sleep           sleeps a minute in time.SLEEP, to be killed
@@ -88,6 +92,13 @@ void _start_c(const struct lk_proc_args *args) {
     }
     const char *mode = lk_proc_args_arg(args, 1);
 
+    if (test_streq(mode, "count")) {
+        lk_exit(100 + (int)args->nhandles);
+    }
+    if (test_streq(mode, "impulse")) {
+        const struct lk_impulse imp = {.type = LK_IMPULSE_USER_BASE};
+        lk_exit(lk_impulse_send(console_h, &imp));
+    }
     if (test_streq(mode, "memobj") && args->nargs == 3) {
         const char *text = lk_proc_args_arg(args, 2);
         char *p = memobj(args);

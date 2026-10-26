@@ -148,8 +148,9 @@ static void writer(void *arg) {
 static void test_writers(void) {
     lk_handle_t child = LK_HANDLE_INVALID;
     const char *argv[] = {CHILD, "read"};
-    CHECK_EQ(lk_process_spawn(process_h, CHILD, 2, argv, LK_PROCESS_SPAWN_SERVICES, NULL, NULL, 0,
-                              &child, NULL),
+    // the console the read is on, a second view of this process's connection
+    const struct test_handoff console = {console_h, LK_TAG_CONSOLE, LK_RIGHTS_ALL};
+    CHECK_EQ(test_spawn(process_h, CHILD, 2, argv, &console, 1, NULL, NULL, 0, &child, NULL),
              NO_ERROR);
     // long enough for the child to reach its read
     CHECK_EQ(lk_wait_one(child, LK_SIGNAL_TERMINATED, 50 * MS, NULL), ERR_TIMED_OUT);
