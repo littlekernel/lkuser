@@ -95,6 +95,9 @@ public:
     // holds as a handle with rights until then (process.SPAWN). Before start().
     void set_exit_notify(lk::ref_ptr<object> conn, uint32_t rights);
 
+    // A boot process, which the reaper reports to boot_reaped() once freed. Before start().
+    void set_boot() { boot_ = true; }
+
     uint32_t pid() const { return pid_; }
     const char *name() const { return name_; }
     vmm_aspace_t *aspace() const { return aspace_; }
@@ -156,6 +159,8 @@ private:
     lk::ref_ptr<object> exit_notify_;
     uint32_t exit_notify_rights_ = 0;
     impulse_node exit_impulse_;
+
+    bool boot_ = false;
 };
 
 } // namespace lkuser

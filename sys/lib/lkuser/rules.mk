@@ -10,17 +10,19 @@ GLOBAL_INCLUDES += $(LOCAL_DIR)/include
 LKUSER_SERVICES ?= console process time vm namespace file
 
 # The boot image: the LKUSER_BOOT_FS file system on LKUSER_BOOT_DEV, mounted read-only at /init
-# before the shell starts, beside a memfs at /tmp. With LKUSER_BOOT_UNMOUNT set to 1 there is
-# no file system once the boot processes are loaded: the image is unmounted before any starts,
-# and there is no /tmp.
+# at boot, before the shell if there is one, beside a memfs at /tmp. With LKUSER_BOOT_UNMOUNT set
+# to 1 there is no file system once the boot processes are loaded: the image is unmounted
+# before any starts, and there is no /tmp.
 LKUSER_BOOT_FS ?= fat
 LKUSER_BOOT_DEV ?= virtio0
 LKUSER_BOOT_UNMOUNT ?= 0
 
 # Processes started at boot, before the shell, in order: path[:arg...][@service] each, the path
-# in the kernel's tree (/init/...). With @service the process serves that service in the
-# kernel's place: it is born with an endpoint under LK_TAG_SERVE_ENDPOINT, and every process the
-# kernel makes after it is born connected to that endpoint under the service's tag.
+# in the kernel's tree (/init/...), each also given the words of the kernel command line's
+# lkuser.<name> (its file name) after its own arguments. With @service the process serves that
+# service in the kernel's place: it is born with an endpoint under LK_TAG_SERVE_ENDPOINT, and
+# every process the kernel makes after it is born connected to that endpoint under the
+# service's tag.
 LKUSER_BOOT ?=
 
 # slots in each process's handle table
@@ -51,6 +53,7 @@ MODULE_SRCS += $(LOCAL_DIR)/wait.cpp
 MODULE_SRCS += $(LOCAL_DIR)/svc/svc.cpp
 MODULE_SRCS += $(foreach s,$(LKUSER_SERVICES),$(LOCAL_DIR)/svc/$(s).cpp)
 
+MODULE_DEPS += lib/cmdline
 MODULE_DEPS += lib/elf
 MODULE_DEPS += lib/fs
 MODULE_DEPS += lib/libcpp

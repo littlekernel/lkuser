@@ -9,13 +9,16 @@
 // LKUSER_BOOT, loaded from the image and started before the shell.
 
 #include <kernel/thread.h>
+#include <lib/cmdline.h>
 #include <lib/fs.h>
 #include <lk/err.h>
 #include <lk/init.h>
+#include <platform.h>
 #include <stdio.h>
 #include <string.h>
 #include <utility>
 
+#include "boot.h"
 #include "endpoint.h"
 #include "handle.h"
 #include "proc.h"
@@ -33,6 +36,9 @@ constexpr char kImageMount[] = "/init";
 constexpr char kTmpMount[] = "/tmp";
 constexpr size_t kMaxBoot = 8;
 constexpr int kMaxArgs = 16;
+
+// the boot processes not yet reaped, and one more while boot_load is starting them
+int boot_live = 1;
 
 struct boot_proc {
     lk::ref_ptr<proc> p;
@@ -54,8 +60,43 @@ char *next_field(char **s, char sep) {
     return field;
 }
 
+// The words of the kernel command line's lkuser.<name>, name being path's file name, added to
+// argv after its first *argc and cut up in place in buf: '+' and ' ' both separate them, as in
+// lk.autorun. Nothing to add if the command line has no such variable.
+status_t cmdline_args(const char *path, char *buf, size_t len, const char **argv, int *argc) {
+    const char *slash = strrchr(path, '/');
+    char var[FS_MAX_FILE_LEN + sizeof("lkuser.")];
+    if (snprintf(var, sizeof(var), "lkuser.%s", slash ? slash + 1 : path) >= (int)sizeof(var)) {
+        return ERR_TOO_BIG;
+    }
+    status_t err = cmdline_get_string(var, buf, len, nullptr);
+    if (err == ERR_NOT_FOUND) {
+        return NO_ERROR;
+    }
+    if (err < 0) {
+        return err;
+    }
+    char *p = buf;
+    for (;;) {
+        while (*p == ' ' || *p == '+') {
+            *p++ = '\0';
+        }
+        if (*p == '\0') {
+            return NO_ERROR;
+        }
+        if (*argc == kMaxArgs) {
+            return ERR_TOO_BIG;
+        }
+        argv[(*argc)++] = p;
+        while (*p && *p != ' ' && *p != '+') {
+            p++;
+        }
+    }
+}
+
 // One LKUSER_BOOT entry, path[:arg...][@service], in text (cut up in place), the path in the
-// kernel's tree: its process made and loaded, not started. With @service the process is born
+// kernel's tree: its process made and loaded, not started, with the arguments the entry gives
+// it and then those of the command line's lkuser.<name>. With @service the process is born
 // with a new endpoint under LK_TAG_SERVE_ENDPOINT, and the service points at that endpoint for
 // every process the kernel makes later.
 status_t make_one(char *text, boot_proc *out) {
@@ -74,6 +115,11 @@ status_t make_one(char *text, boot_proc *out) {
     if (argv[0][0] != '/') {
         return ERR_INVALID_ARGS;
     }
+    char extra[256];
+    status_t err = cmdline_args(argv[0], extra, sizeof(extra), argv, &argc);
+    if (err < 0) {
+        return err;
+    }
 
     // as many calls in progress as a process can hold
     lk::ref_ptr<endpoint> ep;
@@ -86,7 +132,7 @@ status_t make_one(char *text, boot_proc *out) {
         serve = {LK_TAG_SERVE_ENDPOINT, ep, kEndpointRights};
     }
     lk::ref_ptr<proc> p;
-    status_t err = proc::create(argc, argv, true, service ? &serve : nullptr, service ? 1 : 0, &p);
+    err = proc::create(argc, argv, true, service ? &serve : nullptr, service ? 1 : 0, &p);
     if (err < 0) {
         return err;
     }
@@ -115,6 +161,7 @@ int boot_load(void *arg) {
     if (err < 0) {
         printf("lkuser: boot: mounting %s on %s at %s failed: %d\n", LKUSER_BOOT_FS,
                LKUSER_BOOT_DEV, kImageMount, err);
+        boot_reaped();
         return err;
     }
 #if !LKUSER_BOOT_UNMOUNT
@@ -148,9 +195,12 @@ int boot_load(void *arg) {
 
     for (size_t i = 0; i < n; i++) {
         lk::ref_ptr<proc> &p = procs[i].p;
+        p->set_boot();
+        __atomic_add_fetch(&boot_live, 1, __ATOMIC_RELAXED);
         err = p->start(procs[i].entry);
         if (err < 0) {
             printf("lkuser: boot: starting %s failed: %d\n", p->name(), err);
+            __atomic_sub_fetch(&boot_live, 1, __ATOMIC_RELAXED);
             continue;
         }
         printf("lkuser: boot: started %s as process %u\n", p->name(), p->pid());
@@ -159,6 +209,7 @@ int boot_load(void *arg) {
             printf("lkuser: boot: lkuser wait will not wait for process %u\n", pid);
         }
     }
+    boot_reaped();
     return NO_ERROR;
 }
 
@@ -177,6 +228,22 @@ void boot_init(uint level) {
 }
 
 } // namespace
+
+void boot_reaped() {
+    if (__atomic_sub_fetch(&boot_live, 1, __ATOMIC_ACQ_REL) != 0) {
+        return;
+    }
+    bool halt = false;
+    if (cmdline_get_bool("lkuser.halt", &halt) < 0 || !halt) {
+        return;
+    }
+    // what lkuser wait would wait for holds the last references to the boot processes
+    clear_background();
+    printf("lkuser: halt: objects\n");
+    object::for_each([](object &o) { o.dump(); }, true);
+    printf("lkuser: halt: end\n");
+    platform_halt(HALT_ACTION_SHUTDOWN, HALT_REASON_SW_RESET);
+}
 
 } // namespace lkuser
 

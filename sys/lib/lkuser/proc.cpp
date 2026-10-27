@@ -34,6 +34,7 @@
 #include <string.h>
 #include <sys/lk_abi.h>
 
+#include "boot.h"
 #include "copy.h"
 #include "endpoint.h"
 #include "memobj.h"
@@ -424,8 +425,12 @@ void proc::reap_exited() {
         found->teardown();
         found->signal(LK_SIGNAL_TERMINATED);
         found->notify_exit();
+        const bool boot = found->boot_;
         // proc_list's reference
         found->release();
+        if (boot) {
+            boot_reaped();
+        }
     }
 }
 

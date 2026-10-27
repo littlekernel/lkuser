@@ -272,6 +272,17 @@ void wait_background() {
     }
 }
 
+void clear_background() {
+    for (auto &b : background) {
+        // dropped after the lock, at the end of the iteration
+        lk::ref_ptr<proc> p;
+        {
+            AutoLock guard(background_lock);
+            p = std::move(b);
+        }
+    }
+}
+
 } // namespace lkuser
 
 #if defined(WITH_LIB_CONSOLE)

@@ -34,9 +34,12 @@ BUILDDIR := build-$(ARCH)
 #   usertest  every kernel service; the console loads the apps (the default)
 #   consoled  usertest with the console served from user space by /bin/consoled, from boot
 #   mini      the console and process services only, and one static app started at boot
+#   direct    no shell: the kernel starts init from an rofs image linked into it
 PROFILE ?= usertest
-PROFILES := usertest consoled mini
+PROFILES := usertest consoled mini direct
 LK_TESTPROJECT := qemu-$(ARCH)-$(PROFILE)
+# where each file starts in root.rofs, the direct profile's image: a page boundary
+ROFS_ALIGN := 4096
 
 # some newlib stuff
 NEWLIB_BUILD_DIR := build-newlib-$(ARCH)
@@ -90,8 +93,14 @@ _all: lk apps libs
 LK_MAKEOVERRIDES := $(filter-out ARCH=%,$(MAKEOVERRIDES))
 lk clean spotless: MAKEOVERRIDES = $(LK_MAKEOVERRIDES)
 
+# the direct profile links root.rofs into the kernel, so its apps build first
+ifeq ($(PROFILE),direct)
+LK_MAKEARGS := ROFS_EMBED_IMAGE=$(abspath $(BUILDDIR)/root.rofs) ROFS_EMBED_ALIGN=$(ROFS_ALIGN)
+lk: $(BUILDDIR)/root.rofs
+endif
+
 lk:
-	PROJECT=$(LK_TESTPROJECT) $(MAKE) -f makefile.lk
+	PROJECT=$(LK_TESTPROJECT) $(MAKE) -f makefile.lk $(LK_MAKEARGS)
 
 apps: $(APPS) $(APPS_EXTRADEPS)
 
@@ -101,7 +110,7 @@ clean-apps:
 	rm -rf -- "."/"$(BUILDDIR)"
 
 clean: clean-apps
-	PROJECT=$(LK_TESTPROJECT) $(MAKE) -f makefile.lk clean
+	PROJECT=$(LK_TESTPROJECT) $(MAKE) -f makefile.lk $(LK_MAKEARGS) clean
 
 spotless: clean-apps clean-newlib
 	$(MAKE) -f makefile.lk spotless
@@ -165,6 +174,13 @@ $(BUILDDIR)/root.fat: $(ROOT_DIR).stamp
 	$(NOECHO)mv $@.tmp $@
 	$(NOECHO)#mdir -/ -i $@ ::
 
+# the same files as an rofs image, which the direct profile links into its kernel
+MKROFS := lk/scripts/mkrofs.py
+$(BUILDDIR)/root.rofs: $(FS_LIST_LEFT) $(MKROFS)
+	@$(MKDIR)
+	@echo generating rofs image $@
+	$(NOECHO)python3 $(MKROFS) -a $(ROFS_ALIGN) -o $@ $(FS_LIST)
+
 fs: $(BUILDDIR)/root.fat
 
 list-toolchain:
@@ -191,15 +207,23 @@ TEST_APPS_usertest := $(TEST_APPS_COMMON) consoletest
 TEST_APPS_consoled := $(TEST_APPS_COMMON) consoletest:quit
 TEST_BOOT_consoled := consoled
 TEST_BOOT_mini := minitest
+# init runs the apps, and the kernel halts once it is done (the harness's -i)
+TEST_APPS_direct := $(TEST_APPS_usertest)
+TEST_BOOT_direct := init
+TEST_INIT_direct := 1
 TEST_APPS ?= $(TEST_APPS_$(PROFILE))
 TEST_BOOT ?= $(TEST_BOOT_$(PROFILE))
+TEST_INIT ?= $(TEST_INIT_$(PROFILE))
+# the disk the FAT profiles boot from; the direct one carries its image
+TEST_DISK := $(if $(filter direct,$(PROFILE)),,$(BUILDDIR)/root.fat)
 TEST_TIMEOUT ?= 60
 TEST_SMP ?= 1
 TEST_LOG := $(BUILDDIR)/test-auto$(if $(filter-out usertest,$(PROFILE)),-$(PROFILE)).log
 
 test-auto: _all fs
-	scripts/qemu-test.sh -a $(ARCH) -k build-$(LK_TESTPROJECT)/lk.elf -f $(BUILDDIR)/root.fat \
-		-l $(TEST_LOG) -t $(TEST_TIMEOUT) -s $(TEST_SMP) $(foreach b,$(TEST_BOOT),-b '$(b)') \
+	scripts/qemu-test.sh -a $(ARCH) -k build-$(LK_TESTPROJECT)/lk.elf \
+		$(if $(TEST_DISK),-f $(TEST_DISK)) -l $(TEST_LOG) -t $(TEST_TIMEOUT) -s $(TEST_SMP) \
+		$(if $(filter 1,$(TEST_INIT)),-i) $(foreach b,$(TEST_BOOT),-b '$(b)') \
 		$(foreach a,$(TEST_APPS),'$(a)')
 
 # every profile's gate in turn

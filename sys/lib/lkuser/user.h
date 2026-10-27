@@ -42,4 +42,7 @@ bool add_background(lk::ref_ptr<proc> p);
 // Waits until every process on the background list has exited, and empties it.
 void wait_background();
 
+// Empties the background list, waiting for nothing.
+void clear_background();
+
 } // namespace lkuser
