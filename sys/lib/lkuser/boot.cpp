@@ -8,6 +8,7 @@
 // The boot file systems, the image at /init and a memfs at /tmp, and the boot processes:
 // LKUSER_BOOT, loaded from the image and started before the shell.
 
+#include <kernel/event.h>
 #include <kernel/thread.h>
 #include <lib/cmdline.h>
 #include <lib/fs.h>
@@ -39,6 +40,8 @@ constexpr int kMaxArgs = 16;
 
 // the boot processes not yet reaped, and one more while boot_load is starting them
 int boot_live = 1;
+// signaled once the last has been reaped
+event_t boot_gone = EVENT_INITIAL_VALUE(boot_gone, false, 0);
 
 struct boot_proc {
     lk::ref_ptr<proc> p;
@@ -213,9 +216,22 @@ int boot_load(void *arg) {
     return NO_ERROR;
 }
 
+// With lkuser.halt the boot processes are the whole run: once the last has been reaped, every
+// object left is printed and the kernel powers off.
+[[noreturn]] void halt() {
+    event_wait(&boot_gone);
+    // what lkuser wait would wait for holds the last references to the boot processes
+    clear_background();
+    printf("lkuser: halt: objects\n");
+    object::for_each([](object &o) { o.dump(); }, true);
+    printf("lkuser: halt: end\n");
+    platform_halt(HALT_ACTION_SHUTDOWN, HALT_REASON_SW_RESET);
+}
+
 // The loading reads the images through the file system and block drivers, deeper than the
 // stack the init hooks run on allows on arm64, so it runs on a thread with a user thread's
-// kernel stack.
+// kernel stack. With lkuser.halt the hook then waits out the boot processes and halts, so the
+// init levels after it, the shell's among them, never run.
 void boot_init(uint level) {
     thread_t *t = thread_create("lkuser boot", &boot_load, nullptr, DEFAULT_PRIORITY,
                                 thread::kKernelStackSize);
@@ -225,24 +241,18 @@ void boot_init(uint level) {
     }
     thread_resume(t);
     thread_join(t, nullptr, INFINITE_TIME);
+    bool halt_requested = false;
+    if (cmdline_get_bool("lkuser.halt", &halt_requested) == NO_ERROR && halt_requested) {
+        halt();
+    }
 }
 
 } // namespace
 
 void boot_reaped() {
-    if (__atomic_sub_fetch(&boot_live, 1, __ATOMIC_ACQ_REL) != 0) {
-        return;
+    if (__atomic_sub_fetch(&boot_live, 1, __ATOMIC_ACQ_REL) == 0) {
+        event_signal(&boot_gone, true);
     }
-    bool halt = false;
-    if (cmdline_get_bool("lkuser.halt", &halt) < 0 || !halt) {
-        return;
-    }
-    // what lkuser wait would wait for holds the last references to the boot processes
-    clear_background();
-    printf("lkuser: halt: objects\n");
-    object::for_each([](object &o) { o.dump(); }, true);
-    printf("lkuser: halt: end\n");
-    platform_halt(HALT_ACTION_SHUTDOWN, HALT_REASON_SW_RESET);
 }
 
 } // namespace lkuser

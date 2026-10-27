@@ -31,8 +31,8 @@ ARCH ?= riscv
 BUILDDIR := build-$(ARCH)
 
 # the kernel's profile, the project sys/project/qemu-$(ARCH)-$(PROFILE).mk:
-#   usertest  every kernel service; the console loads the apps (the default)
-#   consoled  usertest with the console served from user space by /bin/consoled, from boot
+#   usertest  every kernel service; init, started at boot, runs the apps (the default)
+#   consoled  usertest with the console served from user space by consoled, from boot
 #   mini      the console and process services only, and one static app started at boot
 #   direct    no shell: the kernel starts init from an rofs image linked into it
 PROFILE ?= usertest
@@ -205,11 +205,18 @@ endif
 TEST_APPS_COMMON := rawtest:a:b:c calltest boottest posixtest spawntest faulttest=-40 ipctest echoserver& echotest
 TEST_APPS_usertest := $(TEST_APPS_COMMON) consoletest
 TEST_APPS_consoled := $(TEST_APPS_COMMON) consoletest:quit
-TEST_BOOT_consoled := consoled
+# init runs the apps, and the kernel halts once the boot processes are done (the harness's
+# -i); mini's boot process is its test, which the autorun waits for. Under the autorun init
+# has nothing to run, and its lines can tear against the shell's starting up, so it is checked
+# only with -i.
+TEST_INIT_BOOT = $(if $(filter 1,$(TEST_INIT)),init)
+TEST_BOOT_usertest = $(TEST_INIT_BOOT)
+TEST_BOOT_consoled = consoled $(TEST_INIT_BOOT)
 TEST_BOOT_mini := minitest
-# init runs the apps, and the kernel halts once it is done (the harness's -i)
 TEST_APPS_direct := $(TEST_APPS_usertest)
 TEST_BOOT_direct := init
+TEST_INIT_usertest := 1
+TEST_INIT_consoled := 1
 TEST_INIT_direct := 1
 TEST_APPS ?= $(TEST_APPS_$(PROFILE))
 TEST_BOOT ?= $(TEST_BOOT_$(PROFILE))
