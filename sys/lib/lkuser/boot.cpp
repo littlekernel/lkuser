@@ -5,8 +5,10 @@
  * license that can be found in the LICENSE file or at
  * https://opensource.org/licenses/MIT
  */
-// The boot processes: LKUSER_BOOT, loaded from the boot device and started before the shell.
+// The boot file systems, the image at /init and a memfs at /tmp, and the boot processes:
+// LKUSER_BOOT, loaded from the image and started before the shell.
 
+#include <kernel/thread.h>
 #include <lib/fs.h>
 #include <lk/err.h>
 #include <lk/init.h>
@@ -18,14 +20,17 @@
 #include "handle.h"
 #include "proc.h"
 #include "svc/svc.h"
+#include "thread.h"
 #include "user.h"
 
 namespace lkuser {
 
 namespace {
 
-// where the boot device is mounted, read-only, while the images load; no process sees it
-constexpr char kBootMount[] = "/boot";
+// the boot device, read-only: the boot processes' images and what user space reads of it
+constexpr char kImageMount[] = "/init";
+// a memfs, where user space writes
+constexpr char kTmpMount[] = "/tmp";
 constexpr size_t kMaxBoot = 8;
 constexpr int kMaxArgs = 16;
 
@@ -49,10 +54,10 @@ char *next_field(char **s, char sep) {
     return field;
 }
 
-// One LKUSER_BOOT entry, path[:arg...][@service], in text (cut up in place): its process made
-// and loaded, not started. With @service the process is born with a new endpoint under
-// LK_TAG_SERVE_ENDPOINT, and the service points at that endpoint for every process the kernel
-// makes later.
+// One LKUSER_BOOT entry, path[:arg...][@service], in text (cut up in place), the path in the
+// kernel's tree: its process made and loaded, not started. With @service the process is born
+// with a new endpoint under LK_TAG_SERVE_ENDPOINT, and the service points at that endpoint for
+// every process the kernel makes later.
 status_t make_one(char *text, boot_proc *out) {
     char *service = strchr(text, '@');
     if (service) {
@@ -68,10 +73,6 @@ status_t make_one(char *text, boot_proc *out) {
     }
     if (argv[0][0] != '/') {
         return ERR_INVALID_ARGS;
-    }
-    char path[FS_MAX_PATH_LEN];
-    if (snprintf(path, sizeof(path), "%s%s", kBootMount, argv[0]) >= (int)sizeof(path)) {
-        return ERR_TOO_BIG;
     }
 
     // as many calls in progress as a process can hold
@@ -89,7 +90,7 @@ status_t make_one(char *text, boot_proc *out) {
     if (err < 0) {
         return err;
     }
-    err = load_image(p.get(), path, &out->entry);
+    err = load_image(p.get(), argv[0], &out->entry);
     if (err < 0) {
         return err;
     }
@@ -105,23 +106,28 @@ status_t make_one(char *text, boot_proc *out) {
     return NO_ERROR;
 }
 
-// Every process is made, and every service it serves pointed at it, before any starts, so the
-// service table is written while no process runs. An entry that fails is reported and left
-// out; the ones after it still start.
-void boot_init(uint level) {
-    char list[] = LKUSER_BOOT;
-    if (list[0] == '\0') {
-        return;
-    }
-
-    status_t err = fs_mount(kBootMount, LKUSER_BOOT_FS, LKUSER_BOOT_DEV, FS_MOUNT_OPTION_READ_ONLY);
+// Mounts the boot file systems, then makes every boot process, and points every service it
+// serves at it, before any starts, so the service table is written while no process runs. An
+// entry that fails is reported and left out; the ones after it still start.
+int boot_load(void *arg) {
+    status_t err =
+        fs_mount(kImageMount, LKUSER_BOOT_FS, LKUSER_BOOT_DEV, FS_MOUNT_OPTION_READ_ONLY);
     if (err < 0) {
-        printf("lkuser: boot: mounting %s on %s failed: %d\n", LKUSER_BOOT_FS, LKUSER_BOOT_DEV, err);
-        return;
+        printf("lkuser: boot: mounting %s on %s at %s failed: %d\n", LKUSER_BOOT_FS,
+               LKUSER_BOOT_DEV, kImageMount, err);
+        return err;
     }
+#if !LKUSER_BOOT_UNMOUNT
+    err = fs_mount(kTmpMount, "memfs", nullptr, FS_MOUNT_OPTION_NONE);
+    if (err < 0) {
+        printf("lkuser: boot: mounting a memfs at %s failed: %d\n", kTmpMount, err);
+    }
+#endif
+
+    char list[] = LKUSER_BOOT;
     boot_proc procs[kMaxBoot];
     size_t n = 0;
-    char *rest = list;
+    char *rest = list[0] ? list : nullptr;
     for (char *e; (e = next_field(&rest, ','));) {
         char shown[FS_MAX_PATH_LEN];
         strlcpy(shown, e, sizeof(shown));
@@ -132,11 +138,13 @@ void boot_init(uint level) {
         }
         n++;
     }
-    // left mounted, the boot device would be mounted twice once the console mounts it
-    err = fs_unmount(kBootMount);
+#if LKUSER_BOOT_UNMOUNT
+    // no file system once the images are loaded
+    err = fs_unmount(kImageMount);
     if (err < 0) {
-        printf("lkuser: boot: unmounting %s failed: %d\n", kBootMount, err);
+        printf("lkuser: boot: unmounting %s failed: %d\n", kImageMount, err);
     }
+#endif
 
     for (size_t i = 0; i < n; i++) {
         lk::ref_ptr<proc> &p = procs[i].p;
@@ -151,6 +159,21 @@ void boot_init(uint level) {
             printf("lkuser: boot: lkuser wait will not wait for process %u\n", pid);
         }
     }
+    return NO_ERROR;
+}
+
+// The loading reads the images through the file system and block drivers, deeper than the
+// stack the init hooks run on allows on arm64, so it runs on a thread with a user thread's
+// kernel stack.
+void boot_init(uint level) {
+    thread_t *t = thread_create("lkuser boot", &boot_load, nullptr, DEFAULT_PRIORITY,
+                                thread::kKernelStackSize);
+    if (!t) {
+        printf("lkuser: boot: no thread to load the boot processes on\n");
+        return;
+    }
+    thread_resume(t);
+    thread_join(t, nullptr, INFINITE_TIME);
 }
 
 } // namespace

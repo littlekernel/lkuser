@@ -22,10 +22,12 @@
 #define BIG (64 * 1024)
 // slots in the kernel's handle table in this build
 #define HANDLE_SLOTS 64
-// made and removed again by the file tests, in the image's root
-#define TMP_FILE "/calltest.tmp"
-#define TMP_DIR  "/calltest.dir"
-#define MEM_FILE "/calltest.mem"
+// made and removed again by the file tests
+#define TMP_FILE TEST_TMP "/calltest.tmp"
+#define TMP_DIR  TEST_TMP "/calltest.dir"
+#define MEM_FILE TEST_TMP "/calltest.mem"
+// this program's own image
+#define SELF TEST_IMAGE "/bin/calltest"
 // no table has this many slots
 #define NOT_A_HANDLE 0xffffffffu
 
@@ -614,7 +616,7 @@ static void test_reply_handles(void) {
         .op = LK_NS_OPEN, .reply = &reply, .nreply = 1, .handles = rh,
         .handles_max = LK_MSG_MAX_HANDLES,
     };
-    CHECK_EQ(ns_open_path(&m, LK_NS_OPEN_READ, "/bin/calltest"), NO_ERROR);
+    CHECK_EQ(ns_open_path(&m, LK_NS_OPEN_READ, SELF), NO_ERROR);
     CHECK_EQ(m.nhandles, 1);
     CHECK(rh[0] != LK_HANDLE_INVALID && rh[0] != NOT_A_HANDLE);
     for (int i = 1; i < LK_MSG_MAX_HANDLES; i++) {
@@ -697,7 +699,7 @@ static void test_files(void) {
     lk_ns_rmdir(ns_h, TMP_DIR);
 
     // an image file: at an offset, up to the end, past it
-    CHECK_EQ(lk_ns_open(ns_h, "/bin/calltest", LK_NS_OPEN_READ, &f, &st), NO_ERROR);
+    CHECK_EQ(lk_ns_open(ns_h, SELF, LK_NS_OPEN_READ, &f, &st), NO_ERROR);
     CHECK_EQ(st.type, LK_FILE_TYPE_FILE);
     CHECK(st.size > sizeof(buf));
     CHECK_EQ(lk_file_read(f, 0, buf, sizeof(buf), &n), NO_ERROR);
@@ -810,19 +812,20 @@ static void test_paths(void) {
     m.reply = &reply;
     m.nreply = 1;
 
-    // normalized before the root goes in front: ".." stops at the root, so a path climbing
-    // out of it and back in names nothing
-    CHECK_EQ(lk_ns_stat(ns_h, "/bin/../bin/./calltest", &st), NO_ERROR);
-    CHECK_EQ(lk_ns_stat(ns_h, "/../bin/calltest", &st), NO_ERROR);
-    CHECK_EQ(lk_ns_stat(ns_h, "/../fs/bin/calltest", &st), ERR_NOT_FOUND);
+    // normalized: ".." stops at the root, and anywhere else takes off the name before it
+    CHECK_EQ(lk_ns_stat(ns_h, TEST_IMAGE "/bin/../bin/./calltest", &st), NO_ERROR);
+    CHECK_EQ(lk_ns_stat(ns_h, "/.." SELF, &st), NO_ERROR);
+    CHECK_EQ(lk_ns_stat(ns_h, TEST_IMAGE "/../bin/calltest", &st), ERR_NOT_FOUND);
     CHECK_EQ(lk_ns_stat(ns_h, "/", &st), NO_ERROR);
     CHECK_EQ(st.type, LK_FILE_TYPE_DIR);
 
     // relative, empty, holding a NUL, a length that disagrees, too long
-    CHECK_EQ(lk_ns_stat(ns_h, "bin/calltest", &st), ERR_BAD_PATH);
+    static const char nul_path[] = SELF "\0x";
+    const uint32_t self_len = sizeof(SELF) - 1;
+    CHECK_EQ(lk_ns_stat(ns_h, SELF + 1, &st), ERR_BAD_PATH);
     CHECK_EQ(ns_req(&m, 0, 0, "", 0), ERR_BAD_PATH);
-    CHECK_EQ(ns_req(&m, 0, 6, "/bin\0x", 6), ERR_BAD_PATH);
-    CHECK_EQ(ns_req(&m, 0, 5, "/bin", 4), ERR_INVALID_ARGS);
+    CHECK_EQ(ns_req(&m, 0, sizeof(nul_path) - 1, nul_path, sizeof(nul_path) - 1), ERR_BAD_PATH);
+    CHECK_EQ(ns_req(&m, 0, self_len + 1, SELF, self_len), ERR_INVALID_ARGS);
     char longpath[201];
     for (int i = 0; i < 200; i++) {
         longpath[i] = i % 8 ? 'a' : '/';
@@ -832,13 +835,13 @@ static void test_paths(void) {
     CHECK_EQ(lk_msg_call(ns_h, LK_NS_STAT, "ab", 2, &st, sizeof(st), NULL), ERR_INVALID_ARGS);
 
     // flags: only OPEN takes them, and only these mixes
-    CHECK_EQ(ns_req(&m, LK_NS_OPEN_READ, 4, "/bin", 4), ERR_INVALID_ARGS);
-    CHECK_EQ(open_status(1u << 6 | LK_NS_OPEN_READ, "/bin/calltest"), ERR_INVALID_ARGS);
-    CHECK_EQ(open_status(0, "/bin/calltest"), ERR_INVALID_ARGS);
-    CHECK_EQ(open_status(LK_NS_OPEN_DIR | LK_NS_OPEN_READ, "/bin"), ERR_INVALID_ARGS);
-    CHECK_EQ(open_status(LK_NS_OPEN_READ | LK_NS_OPEN_EXCL, "/bin/calltest"), ERR_INVALID_ARGS);
-    CHECK_EQ(open_status(LK_NS_OPEN_READ | LK_NS_OPEN_TRUNC, "/bin/calltest"), ERR_INVALID_ARGS);
-    CHECK_EQ(open_status(LK_NS_OPEN_DIR, "/bin"), NO_ERROR);
+    CHECK_EQ(ns_req(&m, LK_NS_OPEN_READ, self_len, SELF, self_len), ERR_INVALID_ARGS);
+    CHECK_EQ(open_status(1u << 6 | LK_NS_OPEN_READ, SELF), ERR_INVALID_ARGS);
+    CHECK_EQ(open_status(0, SELF), ERR_INVALID_ARGS);
+    CHECK_EQ(open_status(LK_NS_OPEN_DIR | LK_NS_OPEN_READ, TEST_IMAGE "/bin"), ERR_INVALID_ARGS);
+    CHECK_EQ(open_status(LK_NS_OPEN_READ | LK_NS_OPEN_EXCL, SELF), ERR_INVALID_ARGS);
+    CHECK_EQ(open_status(LK_NS_OPEN_READ | LK_NS_OPEN_TRUNC, SELF), ERR_INVALID_ARGS);
+    CHECK_EQ(open_status(LK_NS_OPEN_DIR, TEST_IMAGE "/bin"), NO_ERROR);
     CHECK_EQ(lk_msg_call(ns_h, 99, NULL, 0, NULL, 0, NULL), ERR_NOT_SUPPORTED);
 
     say("CALLTEST: paths ok\n");
@@ -978,7 +981,7 @@ static void test_memobj(void) {
     CHECK_EQ(lk_handle_close(f), NO_ERROR);
     CHECK_EQ(lk_ns_unlink(ns_h, MEM_FILE), NO_ERROR);
     // the open mode holds as for READ and WRITE
-    CHECK_EQ(lk_ns_open(ns_h, "/bin/calltest", LK_NS_OPEN_READ, &f, NULL), NO_ERROR);
+    CHECK_EQ(lk_ns_open(ns_h, SELF, LK_NS_OPEN_READ, &f, NULL), NO_ERROR);
     CHECK_EQ(lk_file_write_from(f, 0, 0, m, 0, PAGE, &n, NULL), ERR_ACCESS_DENIED);
     CHECK_EQ(lk_handle_close(f), NO_ERROR);
 

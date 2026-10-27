@@ -10,6 +10,7 @@ WITH_ARCH_USPACE_TESTS := 0
 # LKUSER_LK_PROJECT and includes this.
 LKUSER_SERVICES := console process
 LKUSER_HANDLES := 16
-LKUSER_BOOT := /bin/minitest:$(LKUSER_HANDLES)
+LKUSER_BOOT := /init/bin/minitest:$(LKUSER_HANDLES)
+LKUSER_BOOT_UNMOUNT := 1
 
 include $(LKUSER_LK_PROJECT)

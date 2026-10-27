@@ -8,11 +8,12 @@
 #pragma once
 
 // Helpers for the tests that run without a libc: string basics, output through debug_write,
-// CHECK/CHECK_EQ, which count failures and print each one, and test_spawn. Define TEST_NAME,
-// the upper-cased app name, before including.
+// CHECK/CHECK_EQ, which count failures and print each one, test_spawn, and the paths of
+// testpaths.h. Define TEST_NAME, the upper-cased app name, before including.
 
 #include <lk/ipc.h>
 #include <lk/services.h>
+#include <testpaths.h>
 
 #ifndef TEST_NAME
 #error define TEST_NAME before including lktest.h

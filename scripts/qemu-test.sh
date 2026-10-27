@@ -6,23 +6,23 @@
 # license that can be found in the LICENSE file or at
 # https://opensource.org/licenses/MIT
 #
-# Non-interactive boot test: boots the kernel with a scratch copy of the FAT image attached
-# (the tests write to it, so every run starts from the image as built), runs each app through
-# lk.autorun and powers off. Passes only when QEMU exits on its own, the kernel never panicked,
+# Non-interactive boot test: boots the kernel with a scratch copy of the FAT image attached,
+# which the kernel mounts read-only at /init, runs each app through lk.autorun and powers off.
+# Passes only when QEMU exits on its own, the kernel never panicked, the image was not written,
 # and every app exited with the code it was expected to, printing "<APP>: PASS" (the name
 # upper-cased) if that code is 0. The console log and the scratch image are kept for
 # inspection.
 #
-# Each app is name[:arg...][&][=code]: /bin/<name> runs with the arguments after it, so
-# "rawtest:a:b:c" runs "lkuser load /bin/rawtest a b c", and is expected to exit with code
+# Each app is name[:arg...][&][=code]: /init/bin/<name> runs with the arguments after it, so
+# "rawtest:a:b:c" runs "lkuser load /init/bin/rawtest a b c", and is expected to exit with code
 # (default 0), as "lkuser: process <pid> (<name>) exited with code <code>" reports it. Lines for
 # processes the apps start themselves, under other names, are not counted. With "&" the app runs
 # in the background ("lkuser start") while the ones after it run, and "lkuser wait" waits for
-# every such app before the image is unmounted, so a server must end on its own.
+# every such app before QEMU powers off, so a server must end on its own.
 #
 # Each -b name[=code] is a process the kernel starts at boot (LKUSER_BOOT), checked the same way
 # but not loaded; "lkuser wait" waits for it too, so it must end on its own, after the apps
-# (a server is told to quit by the last app). With no apps the image is not mounted at all.
+# (a server is told to quit by the last app).
 #
 # usage: qemu-test.sh -a <arch> -k <lk.elf> -f <root.fat> -l <log> [-t <secs>] [-s <smp>]
 #                     [-b name[=code]]... app...
@@ -127,12 +127,9 @@ done
 
 # '+' is a space to lib/cmdline; a literal space would end the argument
 autorun=
-if [ ${#specs[@]} -gt 0 ]; then
-    autorun+="mount+/fs+fat+virtio0;lkuser+root+/fs;"
-fi
 for i in "${!specs[@]}"; do
     IFS=: read -r -a parts <<<"${specs[$i]}"
-    load="lkuser+load+/bin/${parts[0]}"
+    load="lkuser+load+/init/bin/${parts[0]}"
     for arg in "${parts[@]:1}"; do
         load+="+$arg"
     done
@@ -145,10 +142,6 @@ done
 if [ $any_background = 1 ] || [ ${#boots[@]} -gt 0 ]; then
     autorun+="lkuser+wait;"
 fi
-# unmounted so the scratch image is left clean for mtools and fsck.fat
-if [ ${#specs[@]} -gt 0 ]; then
-    autorun+="unmount+/fs;"
-fi
 autorun+="poweroff"
 if [ ${#autorun} -gt 511 ]; then
     echo "$0: lk.autorun script is ${#autorun} bytes, over the 511 byte limit" >&2
@@ -158,6 +151,7 @@ fi
 mkdir -p "$(dirname "$log")"
 scratch_fs="${log%.log}.fat"
 cp -- "$fsimage" "$scratch_fs" || exit 2
+image_sum=$(sha256sum <"$scratch_fs")
 echo "qemu-test: arch $arch, smp $smp, timeout ${timeout_secs}s, apps: ${apps[*]}${boots:+, boot: ${boots[*]}}"
 
 timeout --foreground "$timeout_secs" "${qemu[@]}" -m 512 -smp "$smp" -nographic \
@@ -180,6 +174,12 @@ fi
 
 if grep -qE 'panic \(caller|ASSERT FAILED' <<<"$clean_log"; then
     echo "qemu-test: FAIL: kernel panic"
+    fail=1
+fi
+
+# the image is mounted read-only
+if [ "$(sha256sum <"$scratch_fs")" != "$image_sum" ]; then
+    echo "qemu-test: FAIL: the image was written"
     fail=1
 fi
 

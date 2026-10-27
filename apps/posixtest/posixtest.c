@@ -13,6 +13,7 @@
 // returns 0 when every check holds; each failed check prints a POSIXTEST: FAIL line and main
 // returns 1.
 
+#include <testpaths.h>
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -23,9 +24,10 @@
 #include <sys/time.h>
 #include <unistd.h>
 
-#define DATA_FILE "/data/posixtest.txt"
-#define OUT_FILE  "/posixtest.out"
-#define OUT_DIR   "/posixtest.dir"
+#define DATA_DIR  TEST_IMAGE "/data"
+#define DATA_FILE DATA_DIR "/posixtest.txt"
+#define OUT_FILE  TEST_TMP "/posixtest.out"
+#define OUT_DIR   TEST_TMP "/posixtest.dir"
 
 // what posixtest.txt holds
 static const char data_text[] = "line one\nline two\nthe third line is longer than the others\n";
@@ -83,16 +85,16 @@ static void test_read(void) {
     CHECK(fclose(f) == 0);
 
     CHECK(stat(DATA_FILE, &st) == 0 && S_ISREG(st.st_mode) && st.st_size == DATA_LEN);
-    CHECK(stat("/data", &st) == 0 && S_ISDIR(st.st_mode));
+    CHECK(stat(DATA_DIR, &st) == 0 && S_ISDIR(st.st_mode));
     // relative to "/", the only working directory
-    CHECK(stat("data/posixtest.txt", &st) == 0 && st.st_size == DATA_LEN);
+    CHECK(stat(DATA_FILE + 1, &st) == 0 && st.st_size == DATA_LEN);
 
     errno = 0;
-    CHECK(fopen("/data/missing.txt", "r") == NULL && errno == ENOENT);
+    CHECK(fopen(DATA_DIR "/missing.txt", "r") == NULL && errno == ENOENT);
     errno = 0;
-    CHECK(open("/data", O_WRONLY) < 0 && errno == EISDIR);
+    CHECK(open(DATA_DIR, O_WRONLY) < 0 && errno == EISDIR);
     errno = 0;
-    CHECK(stat("/data/posixtest.txt/x", &st) < 0);
+    CHECK(stat(DATA_FILE "/x", &st) < 0);
     printf("POSIXTEST: read ok\n");
 }
 

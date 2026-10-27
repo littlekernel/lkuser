@@ -6,12 +6,12 @@
  * https://opensource.org/licenses/MIT
  */
 
-// Processes and threads with no libc: spawning /bin/child with arguments and handles, waiting
-// for it and reading its exit code, a child born with only the handles handed to it and their
-// rights, every way a process ends (exit, thread_exit, a fault, a kill, from one thread or
-// several), killing a child blocked in a sleep, a console read or a wait, the rights a process
-// handle carries, the requests the process service refuses, and threads of its own. Prints
-// SPAWNTEST: PASS; each failed check prints a SPAWNTEST: FAIL line and the exit code is 1.
+// Processes and threads with no libc: spawning the image's bin/child with arguments and
+// handles, waiting for it and reading its exit code, a child born with only the handles handed
+// to it and their rights, every way a process ends (exit, thread_exit, a fault, a kill, from one
+// thread or several), killing a child blocked in a sleep, a console read or a wait, the rights
+// a process handle carries, the requests the process service refuses, and threads of its own.
+// Prints SPAWNTEST: PASS; each failed check prints a SPAWNTEST: FAIL line and the exit code is 1.
 
 #define TEST_NAME "SPAWNTEST"
 #include <lk/services.h>
@@ -20,7 +20,7 @@
 #define PAGE 4096
 #define STACK_SIZE 8192
 #define MS 1000000ull
-#define CHILD "/bin/child"
+#define CHILD TEST_IMAGE "/bin/child"
 // no table has this many slots
 #define NOT_A_HANDLE 0xffffffffu
 
@@ -253,14 +253,18 @@ static void test_spawn_refused(void) {
     const char *argv[] = {CHILD, "thread_exit"};
 
     // the image: an absolute path to an ELF file
-    CHECK_EQ(lk_process_spawn(process_h, "bin/child", 2, argv, 0, NULL, NULL, 0, &p, NULL),
+    CHECK_EQ(lk_process_spawn(process_h, CHILD + 1, 2, argv, 0, NULL, NULL, 0, &p, NULL),
              ERR_BAD_PATH);
-    CHECK_EQ(lk_process_spawn(process_h, "/bin/nothere", 2, argv, 0, NULL, NULL, 0, &p, NULL),
+    CHECK_EQ(lk_process_spawn(process_h, TEST_IMAGE "/bin/nothere", 2, argv, 0, NULL, NULL, 0,
+                              &p, NULL),
              ERR_NOT_FOUND);
-    CHECK(lk_process_spawn(process_h, "/data/posixtest.txt", 2, argv, 0, NULL, NULL, 0, &p,
-                           NULL) < 0);
+    // a file that is there, but no ELF
+    struct lk_file_stat st;
+    CHECK_EQ(lk_ns_stat(ns_h, TEST_IMAGE "/data/posixtest.txt", &st), NO_ERROR);
+    CHECK(lk_process_spawn(process_h, TEST_IMAGE "/data/posixtest.txt", 2, argv, 0, NULL, NULL,
+                           0, &p, NULL) < 0);
     // ".." stops at the root
-    CHECK_EQ(lk_process_spawn(process_h, "/../bin/child", 2, argv, 0, NULL, NULL, 0, &p, NULL),
+    CHECK_EQ(lk_process_spawn(process_h, "/.." CHILD, 2, argv, 0, NULL, NULL, 0, &p, NULL),
              NO_ERROR);
     CHECK_EQ(wait_exit(p), 0);
     CHECK_EQ(lk_handle_close(p), NO_ERROR);

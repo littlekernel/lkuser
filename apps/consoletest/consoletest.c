@@ -19,7 +19,7 @@
 #include <lktest.h>
 
 #define MS 1000000ull
-#define CHILD "/bin/child"
+#define CHILD TEST_IMAGE "/bin/child"
 #define WRITERS 3
 #define LINES 10
 #define STACK_SIZE 4096

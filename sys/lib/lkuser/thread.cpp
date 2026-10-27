@@ -34,10 +34,6 @@ namespace {
 
 uint32_t next_tid = 1;
 
-// A user thread's kernel stack: SPAWN reads the image through the file system and block
-// drivers on it, which takes more than the one page arm64 gives a thread by default.
-constexpr size_t kKernelStackSize = MAX(DEFAULT_STACK_SIZE, 8192ul);
-
 } // namespace
 
 thread::thread(proc *p, vaddr_t entry, vaddr_t sp)

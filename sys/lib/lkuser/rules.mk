@@ -5,18 +5,23 @@ MODULE := $(LOCAL_DIR)
 GLOBAL_INCLUDES += $(LOCAL_DIR)/include
 
 # the kernel-resident services compiled in, one svc/<name>.cpp each; every process the
-# console starts is born with a connection to each that has a startup tag (namespace needs
+# kernel makes itself is born with a connection to each that has a startup tag (namespace needs
 # file, which has none: its connections come from namespace.OPEN)
 LKUSER_SERVICES ?= console process time vm namespace file
 
+# The boot image: the LKUSER_BOOT_FS file system on LKUSER_BOOT_DEV, mounted read-only at /init
+# before the shell starts, beside a memfs at /tmp. With LKUSER_BOOT_UNMOUNT set to 1 there is
+# no file system once the boot processes are loaded: the image is unmounted before any starts,
+# and there is no /tmp.
+LKUSER_BOOT_FS ?= fat
+LKUSER_BOOT_DEV ?= virtio0
+LKUSER_BOOT_UNMOUNT ?= 0
+
 # Processes started at boot, before the shell, in order: path[:arg...][@service] each, the path
-# on the LKUSER_BOOT_FS file system on LKUSER_BOOT_DEV, which is mounted read-only while they
-# load and unmounted before any starts. With @service the process serves that service in the
+# in the kernel's tree (/init/...). With @service the process serves that service in the
 # kernel's place: it is born with an endpoint under LK_TAG_SERVE_ENDPOINT, and every process the
 # kernel makes after it is born connected to that endpoint under the service's tag.
 LKUSER_BOOT ?=
-LKUSER_BOOT_FS ?= fat
-LKUSER_BOOT_DEV ?= virtio0
 
 # slots in each process's handle table
 LKUSER_HANDLES ?= 64
@@ -25,6 +30,7 @@ LKUSER_HANDLES ?= 64
 MODULE_DEFINES += LKUSER_BOOT=\"$(subst $(SPACE),$(COMMA),$(strip $(LKUSER_BOOT)))\"
 MODULE_DEFINES += LKUSER_BOOT_FS=\"$(LKUSER_BOOT_FS)\"
 MODULE_DEFINES += LKUSER_BOOT_DEV=\"$(LKUSER_BOOT_DEV)\"
+MODULE_DEFINES += LKUSER_BOOT_UNMOUNT=$(LKUSER_BOOT_UNMOUNT)
 MODULE_DEFINES += LKUSER_HANDLES=$(LKUSER_HANDLES)
 
 MODULE_SRCS += $(LOCAL_DIR)/boot.cpp
@@ -49,6 +55,9 @@ MODULE_DEPS += lib/elf
 MODULE_DEPS += lib/fs
 MODULE_DEPS += lib/libcpp
 MODULE_DEPS += lib/lktl
+ifneq ($(LKUSER_BOOT_UNMOUNT),1)
+MODULE_DEPS += lib/fs/memfs
+endif
 
 # console.READ waits on the console's input buffer, where a kill can reach it
 ifneq ($(filter console,$(LKUSER_SERVICES)),)

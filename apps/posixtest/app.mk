@@ -7,6 +7,7 @@ APP := $(APP_BUILDDIR)/$(APP_NAME)
 APP_LIBS := $(call TOBUILDDIR, lib/lku/lku.a)
 
 APP_CFLAGS :=
+APP_INCLUDES := -Iapps/include
 APP_SRCS := $(LOCAL_DIR)/posixtest.c
 
 # the file the test reads; posixtest.c holds the same text

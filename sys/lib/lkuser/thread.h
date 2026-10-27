@@ -41,6 +41,10 @@ class thread : public object, public lk::list_hook<> {
 public:
     static constexpr obj_kind kKind = obj_kind::THREAD;
 
+    // A user thread's kernel stack: SPAWN reads the image through the file system and block
+    // drivers on it, which takes more than the one page arm64 gives a thread by default.
+    static constexpr size_t kKernelStackSize = MAX(DEFAULT_STACK_SIZE, 8192ul);
+
     // A thread of p that will enter user space at entry with sp, once proc::start_thread has
     // made its LK thread.
     static status_t create(proc *p, vaddr_t entry, vaddr_t sp, lk::ref_ptr<thread> *out);

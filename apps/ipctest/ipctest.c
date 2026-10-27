@@ -25,7 +25,7 @@
 #define SEC (1000 * MS)
 #define STACK_SIZE 8192
 #define NTHREADS 4
-#define CHILD "/bin/child"
+#define CHILD TEST_IMAGE "/bin/child"
 #define HDR sizeof(struct lk_msg_hdr)
 // the impulses a process can have queued at once (LKUSER_IMPULSE_POOL)
 #define IMPULSE_POOL 32
