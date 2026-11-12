@@ -91,16 +91,22 @@ _all: lk apps libs
 # ARCH names lkuser's arch (riscv32), not LK's (riscv, which LK's project sets itself), so a
 # command line ARCH stays out of LK's make
 LK_MAKEOVERRIDES := $(filter-out ARCH=%,$(MAKEOVERRIDES))
-lk clean spotless: MAKEOVERRIDES = $(LK_MAKEOVERRIDES)
+lk clean spotless size-table: MAKEOVERRIDES = $(LK_MAKEOVERRIDES)
 
 # the direct profile links root.rofs into the kernel, so its apps build first
 ifeq ($(PROFILE),direct)
 LK_MAKEARGS := ROFS_EMBED_IMAGE=$(abspath $(BUILDDIR)/root.rofs) ROFS_EMBED_ALIGN=$(ROFS_ALIGN)
 lk: $(BUILDDIR)/root.rofs
+size-table: $(BUILDDIR)/root.rofs
 endif
 
 lk:
 	PROJECT=$(LK_TESTPROJECT) $(MAKE) -f makefile.lk $(LK_MAKEARGS)
+
+# the executive's code per file, for the selected project (scripts/size-table.sh); + shares
+# make's jobserver with the script's makes
+size-table:
+	+LK_MAKEARGS='$(LK_MAKEARGS)' scripts/size-table.sh $(LK_TESTPROJECT)
 
 apps: $(APPS) $(APPS_EXTRADEPS)
 
@@ -237,6 +243,6 @@ test-auto: _all fs
 test-auto-all:
 	$(NOECHO)for p in $(PROFILES); do $(MAKE) --no-print-directory test-auto PROFILE=$$p || exit 1; done
 
-.PHONY: all _all apps fs lk clean clean-apps spotless newlib build-newlib configure-newlib clean-newlib list-toolchain test test-auto test-auto-all
+.PHONY: all _all apps fs lk size-table clean clean-apps spotless newlib build-newlib configure-newlib clean-newlib list-toolchain test test-auto test-auto-all
 
 # vim: set noexpandtab ts=4 sw=4:

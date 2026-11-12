@@ -11,8 +11,11 @@
 # 12KB of code on riscv64, and each kernel service within 3KB. Reported, not gated: the script
 # fails only if a build does. code is every .text section, rodata every .rodata/.srodata one.
 # The DEBUG=0 kernel builds into build-<project>-debug0, so the gate's build is left alone.
+# LK_MAKEARGS in the environment goes to both of LK's makes: the direct projects need the
+# makefile's, which name the image they embed, so run those through `make size-table`.
 #
 # usage: size-table.sh [project]   (default qemu-riscv-usertest)
+#        make size-table [ARCH=...] [PROFILE=...]
 
 set -eu
 
@@ -22,10 +25,23 @@ case $project in
     *) prefix=riscv64-elf- ;;
 esac
 size=${TOOLCHAIN_PREFIX:-$prefix}size
-jobs=$(nproc)
+read -r -a lkargs <<< "${LK_MAKEARGS:-}"
+case $project in
+    *-direct)
+        if [ ${#lkargs[@]} -eq 0 ]; then
+            echo "size-table.sh: $project embeds the boot image; use make size-table PROFILE=direct" >&2
+            exit 1
+        fi
+        ;;
+esac
+# under make size-table, make's own jobserver; run by hand, one job per cpu
+jobs=-j$(nproc)
+case ${MAKEFLAGS:-} in
+    *jobserver*) jobs= ;;
+esac
 
-PROJECT=$project make -f makefile.lk -j"$jobs" >/dev/null
-PROJECT=$project DEBUG=0 BUILDDIR_SUFFIX=-debug0 make -f makefile.lk -j"$jobs" >/dev/null
+PROJECT=$project make -f makefile.lk $jobs "${lkargs[@]}" >/dev/null
+PROJECT=$project DEBUG=0 BUILDDIR_SUFFIX=-debug0 make -f makefile.lk $jobs "${lkargs[@]}" >/dev/null
 
 # "<code> <rodata>" of one object file
 sizes() {
