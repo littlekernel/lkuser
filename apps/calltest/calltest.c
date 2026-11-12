@@ -9,9 +9,10 @@
 // Native API test with no libc: calls the kernel services over the connections the process is
 // born with, and checks handles and their rights, endpoints, how the call path treats every
 // malformed call and bad buffer it can be given, handles carried by requests and replies, files
-// and directories through the namespace and file services, and memory objects. Progress lines and CALLTEST: PASS go
-// through the console service; each failed check prints a CALLTEST: FAIL line through
-// debug_write and the exit code is 1.
+// and directories through the namespace and file services, the image at TEST_IMAGE refusing
+// every write, and memory objects. Progress lines and CALLTEST: PASS go through the console
+// service; each failed check prints a CALLTEST: FAIL line through debug_write and the exit
+// code is 1.
 
 #define TEST_NAME "CALLTEST"
 #include <lk/services.h>
