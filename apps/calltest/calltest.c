@@ -805,6 +805,52 @@ static void test_files(void) {
     say("CALLTEST: files ok\n");
 }
 
+// A write to the image refused. The code is the file system's: read-only FAT answers
+// ERR_NOT_ALLOWED, and rofs, which has no write ops, ERR_NOT_SUPPORTED through lib/fs.
+#define CHECK_REFUSED(err)                                              \
+    do {                                                                \
+        const lk_status_t e_ = (err);                                   \
+        if (e_ != ERR_NOT_ALLOWED && e_ != ERR_NOT_SUPPORTED) {         \
+            test_fail_line(__LINE__, #err " refused, got ");            \
+            test_put_dec(e_);                                           \
+            test_put("\n");                                             \
+        }                                                               \
+    } while (0)
+
+// the image mounted at TEST_IMAGE takes no writes of any kind
+static void test_image_readonly(void) {
+    struct lk_file_stat st;
+    lk_handle_t f;
+    size_t n;
+
+    CHECK_EQ(lk_ns_stat(ns_h, SELF, &st), NO_ERROR);
+    const uint64_t size = st.size;
+
+    CHECK_REFUSED(open_status(LK_NS_OPEN_CREATE | LK_NS_OPEN_WRITE, TEST_IMAGE "/calltest.new"));
+    CHECK_REFUSED(lk_ns_mkdir(ns_h, TEST_IMAGE "/calltest.dir"));
+    CHECK_REFUSED(lk_ns_unlink(ns_h, SELF));
+    CHECK_REFUSED(lk_ns_rmdir(ns_h, TEST_IMAGE "/bin"));
+    // refused at the open, or else at every write and truncate
+    lk_status_t err = lk_ns_open(ns_h, SELF, LK_NS_OPEN_WRITE, &f, NULL);
+    if (err == NO_ERROR) {
+        CHECK_REFUSED(lk_file_write(f, 0, 0, "x", 1, &n, NULL));
+        CHECK_REFUSED(lk_file_write(f, 0, LK_FILE_WRITE_APPEND, "x", 1, &n, NULL));
+        CHECK_REFUSED(lk_file_truncate(f, 0));
+        CHECK_EQ(lk_handle_close(f), NO_ERROR);
+    } else {
+        CHECK_REFUSED(err);
+    }
+    CHECK_REFUSED(open_status(LK_NS_OPEN_WRITE | LK_NS_OPEN_TRUNC, SELF));
+
+    CHECK_EQ(lk_ns_stat(ns_h, SELF, &st), NO_ERROR);
+    CHECK_EQ(st.size, size);
+    CHECK_EQ(lk_ns_stat(ns_h, TEST_IMAGE "/calltest.new", &st), ERR_NOT_FOUND);
+    CHECK_EQ(lk_ns_stat(ns_h, TEST_IMAGE "/calltest.dir", &st), ERR_NOT_FOUND);
+    CHECK_EQ(lk_ns_stat(ns_h, TEST_IMAGE "/bin", &st), NO_ERROR);
+
+    say("CALLTEST: image read-only ok\n");
+}
+
 static void test_paths(void) {
     struct lk_file_stat st;
     struct lk_msg m = {.op = LK_NS_STAT};
@@ -1011,6 +1057,7 @@ void _start_c(const struct lk_proc_args *args) {
     test_process();
     test_reply_handles();
     test_files();
+    test_image_readonly();
     test_paths();
     test_memobj();
 
