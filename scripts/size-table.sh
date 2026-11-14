@@ -6,11 +6,11 @@
 # license that can be found in the LICENSE file or at
 # https://opensource.org/licenses/MIT
 #
-# The size of the executive (sys/lib/lkuser) per source file, at DEBUG=0 and at the build's
-# usual DEBUG=2, with the budgets the plan sets: objects, handles, endpoints and wait within
+# The size of the executive (sys/lib/lkuser) per source file, at LK_DEBUG=0 and at the build's
+# usual LK_DEBUG=2, with the budgets the plan sets: objects, handles, endpoints and wait within
 # 12KB of code on riscv64, and each kernel service within 3KB. Reported, not gated: the script
 # fails only if a build does. code is every .text section, rodata every .rodata/.srodata one.
-# The DEBUG=0 kernel builds into build-<project>-debug0, so the gate's build is left alone.
+# The LK_DEBUG=0 kernel builds into build-<project>-debug0, so the gate's build is left alone.
 # LK_MAKEARGS in the environment goes to both of LK's makes: the direct projects need the
 # makefile's, which name the image they embed, so run those through `make size-table`.
 #
@@ -41,7 +41,7 @@ case ${MAKEFLAGS:-} in
 esac
 
 PROJECT=$project make -f makefile.lk $jobs "${lkargs[@]}" >/dev/null
-PROJECT=$project DEBUG=0 BUILDDIR_SUFFIX=-debug0 make -f makefile.lk $jobs "${lkargs[@]}" >/dev/null
+PROJECT=$project LK_DEBUG=0 BUILDDIR_SUFFIX=-debug0 make -f makefile.lk $jobs "${lkargs[@]}" >/dev/null
 
 # "<code> <rodata>" of one object file
 sizes() {
@@ -54,7 +54,7 @@ sizes() {
 dir0=build-$project-debug0/sys/lib/lkuser
 dir2=build-$project/sys/lib/lkuser
 
-printf '%-22s %14s %14s\n' "$project" "DEBUG=0" "DEBUG=2"
+printf '%-22s %14s %14s\n' "$project" "LK_DEBUG=0" "LK_DEBUG=2"
 printf '%-22s %7s %6s %7s %6s\n' "file" "code" "ro" "code" "ro"
 declare -A code0 code2
 total0=0
@@ -81,13 +81,13 @@ done
 verdict() {
     if [ "$1" -le "$2" ]; then echo "within"; else echo "OVER"; fi
 }
-printf 'objects+handles+endpoints+wait: %d at DEBUG=0, %d at DEBUG=2; budget 12288: %s\n' \
+printf 'objects+handles+endpoints+wait: %d at LK_DEBUG=0, %d at LK_DEBUG=2; budget 12288: %s\n' \
     "$core0" "$core2" "$(verdict "$core0" 12288)"
 for name in "${!code0[@]}"; do
     case $name in
         svc/svc) ;;
         svc/*)
-            printf 'service %-12s %5d at DEBUG=0, %5d at DEBUG=2; budget 3072: %s\n' "${name#svc/}" \
+            printf 'service %-12s %5d at LK_DEBUG=0, %5d at LK_DEBUG=2; budget 3072: %s\n' "${name#svc/}" \
                 "${code0[$name]}" "${code2[$name]}" "$(verdict "${code0[$name]}" 3072)"
             ;;
     esac
