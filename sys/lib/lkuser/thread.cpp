@@ -52,7 +52,7 @@ int thread::start_routine(void *arg) {
     thread *t = static_cast<thread *>(arg);
 
     tls_set(TLS_ENTRY_LKUSER, reinterpret_cast<uintptr_t>(t));
-    // killed before it ever ran: user mode would only meet the kill at its first trap
+    // killed before it ever ran: it ends here without entering user mode
     if (thread_signals(get_current_thread()) & THREAD_SIGNAL_KILL) {
         exit_current();
     }

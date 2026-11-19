@@ -168,8 +168,9 @@ extern "C" void riscv_user_exception(long cause, ulong epc, struct riscv_short_i
     lkuser::thread::exit_current();
 }
 
-// A killed thread on its way back to user mode, from a syscall, a fault or an interrupt: its
-// process has exited (exit, a fault or process.KILL), so the thread leaves too.
+// A killed thread on its way to user mode, back from a syscall, a fault or an interrupt or on
+// its first entry (frame NULL, which this never reads): its process has exited (exit, a fault
+// or process.KILL), so the thread leaves too.
 extern "C" void riscv_user_kill(struct riscv_short_iframe *frame) {
     // exit_current takes mutexes
     arch_enable_ints();
@@ -224,8 +225,8 @@ extern "C" void arm64_user_exception(struct arm64_iframe_long *iframe, uint32_t 
     lkuser::thread::exit_current();
 }
 
-// A killed thread on its way back to EL0, from a syscall, a fault or an interrupt: its
-// process has exited (exit, a fault or process.KILL), so the thread leaves too.
+// A killed thread on its way to EL0, back from a syscall, a fault or an interrupt or on its
+// first entry: its process has exited (exit, a fault or process.KILL), so the thread leaves too.
 extern "C" void arm64_user_kill() {
     // exit_current takes mutexes
     arch_enable_ints();
