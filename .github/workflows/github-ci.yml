@@ -49,6 +49,16 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y --no-install-recommends qemu-system-arm qemu-system-misc mtools
 
+    # Ubuntu's QEMU carries only the riscv64 OpenSBI, and -bios default on riscv32 looks for
+    # opensbi-riscv32-generic-fw_dynamic.bin beside it; the opensbi package has the rv32 build
+    - name: riscv32 firmware
+      if: matrix.arch == 'riscv32'
+      shell: bash
+      run: |
+        sudo apt-get install -y --no-install-recommends opensbi
+        sudo ln -sf /usr/lib/riscv32-linux-gnu/opensbi/generic/fw_dynamic.bin \
+          /usr/share/qemu/opensbi-riscv32-generic-fw_dynamic.bin
+
     # compute the toolchains this arch needs: user space takes arch.mk's prefix and LK picks
     # the kernel's own, so riscv32 needs riscv32-elf- beside its user space's riscv64-elf-.
     # TOOLCHAIN_PREFIX is not exported, or it would override LK's choice.
