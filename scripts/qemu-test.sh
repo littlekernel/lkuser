@@ -180,7 +180,9 @@ if [ -n "$fsimage" ]; then
 fi
 echo "qemu-test: arch $arch, smp $smp, timeout ${timeout_secs}s, apps: ${apps[*]}${boots:+, boot: ${boots[*]}}$([ $by_init = 1 ] && echo ", by init")"
 
-timeout --foreground "$timeout_secs" "${qemu[@]}" -m 512 -smp "$smp" -nographic \
+# no NIC: nothing here uses one, and arm64 virt's default virtio-net-pci needs an iPXE ROM
+# (efi-virtio.rom) that a minimal QEMU install lacks
+timeout --foreground "$timeout_secs" "${qemu[@]}" -m 512 -smp "$smp" -nographic -nic none \
     -kernel "$kernel" "${drive[@]}" -append "$cmdline" </dev/null 2>&1 | tee "$log"
 qemu_status=${PIPESTATUS[0]}
 
