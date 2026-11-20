@@ -212,7 +212,7 @@ endif
 # the background while the rest run, and must end by itself. TEST_BOOT names the processes the
 # profile starts at boot (LKUSER_BOOT), as name[=code], checked the same way; consoled ends when
 # consoletest:quit tells it to.
-TEST_APPS_COMMON := rawtest:a:b:c calltest boottest posixtest spawntest faulttest=-40 ipctest echoserver& echotest
+TEST_APPS_COMMON := rawtest:a:b:c calltest boottest posixtest spawntest faulttest=-40 ipctest regtest echoserver& echotest
 # usertest's and direct's apps, which with -i init reads from the image's etc/usertest.list
 # (@usertest.list), past the command line's room; consoled's stay on the command line
 TEST_LIST_usertest := $(TEST_APPS_COMMON) consoletest
