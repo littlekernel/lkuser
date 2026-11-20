@@ -26,7 +26,7 @@ LIB_RULES := $(shell find lib -name lib.mk)
 $(warning LIB_RULES = $(LIB_RULES))
 
 CCACHE ?=
-ARCH ?= riscv
+ARCH ?= riscv64
 
 BUILDDIR := build-$(ARCH)
 
@@ -195,7 +195,7 @@ list-toolchain:
 test: _all fs
 ifeq ($(ARCH),arm)
 	qemu-system-arm -m 512 -smp 1 -machine virt -cpu cortex-a15 -kernel build-$(LK_TESTPROJECT)/lk.elf -nographic -drive if=none,file=$(BUILDDIR)/root.fat,id=blk,format=raw -device virtio-blk-device,drive=blk
-else ifeq ($(ARCH),riscv)
+else ifeq ($(ARCH),riscv64)
 	qemu-system-riscv64 -m 512 -smp 1 -machine virt -cpu rv64 -bios default -kernel build-$(LK_TESTPROJECT)/lk.elf -nographic -drive if=none,file=$(BUILDDIR)/root.fat,id=blk,format=raw -device virtio-blk-device,drive=blk
 else ifeq ($(ARCH),riscv32)
 	qemu-system-riscv32 -m 512 -smp 1 -machine virt -cpu rv32 -bios default -kernel build-$(LK_TESTPROJECT)/lk.elf -nographic -drive if=none,file=$(BUILDDIR)/root.fat,id=blk,format=raw -device virtio-blk-device,drive=blk

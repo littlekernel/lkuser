@@ -18,7 +18,7 @@ jobs:
       matrix:
         toolchain-ver: [15.2.0, 11.3.0]
         arch:
-          - riscv
+          - riscv64
           - riscv32
           - arm64
 

@@ -1,6 +1,6 @@
 # arch stuff
 # riscv32 builds with the riscv64 toolchain and its rv32imac/ilp32 multilib, against the newlib
-# the riscv build installs, which carries every multilib, so it never configures one of its own
+# the riscv64 build installs, which carries every multilib, so it never configures one of its own
 TOOLCHAIN_PREFIX ?= riscv64-elf-
 ARCH_FAMILY := riscv
 
@@ -12,8 +12,8 @@ ARCH_ASMFLAGS :=
 ARCH_LDFLAGS := -m elf32lriscv -Ttext-segment=0x01000000
 
 # newlib path stuff
-NEWLIB_BUILD_DIR := build-newlib-riscv
-NEWLIB_INSTALL_DIR := install-newlib-riscv
+NEWLIB_BUILD_DIR := build-newlib-riscv64
+NEWLIB_INSTALL_DIR := install-newlib-riscv64
 NEWLIB_INC_DIR := $(NEWLIB_INSTALL_DIR)/riscv64-elf/include
 NEWLIB_ARCH_TARGET := riscv64-elf
 

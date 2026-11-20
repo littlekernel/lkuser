@@ -110,7 +110,7 @@ if [ -z "$arch" ] || [ -z "$kernel" ] || [ -z "$log" ] ||
 fi
 
 case $arch in
-    riscv)
+    riscv64)
         qemu=(qemu-system-riscv64 -machine virt -cpu rv64 -bios default)
         ;;
     riscv32)
@@ -120,7 +120,7 @@ case $arch in
         qemu=(qemu-system-aarch64 -machine virt -cpu cortex-a76)
         ;;
     *)
-        echo "$0: no automated test for ARCH=$arch (riscv, riscv32 and arm64 only)" >&2
+        echo "$0: no automated test for ARCH=$arch (riscv64, riscv32 and arm64 only)" >&2
         exit 2
         ;;
 esac

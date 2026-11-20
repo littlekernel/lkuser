@@ -14,12 +14,12 @@
 # LK_MAKEARGS in the environment goes to both of LK's makes: the direct projects need the
 # makefile's, which name the image they embed, so run those through `make size-table`.
 #
-# usage: size-table.sh [project]   (default qemu-riscv-usertest)
+# usage: size-table.sh [project]   (default qemu-riscv64-usertest)
 #        make size-table [ARCH=...] [PROFILE=...]
 
 set -eu
 
-project=${1:-qemu-riscv-usertest}
+project=${1:-qemu-riscv64-usertest}
 case $project in
     qemu-arm64-*) prefix=aarch64-elf- ;;
     *) prefix=riscv64-elf- ;;

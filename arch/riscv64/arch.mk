@@ -1,8 +1,8 @@
 # arch stuff
 TOOLCHAIN_PREFIX ?= riscv64-elf-
 ARCH_FAMILY := riscv
-#ARCH_LINKER_SCRIPT := arch/riscv/linker.ld
-#ARCH_LINKER_SCRIPT := arch/riscv/elf64lriscv.xe
+#ARCH_LINKER_SCRIPT := arch/riscv64/linker.ld
+#ARCH_LINKER_SCRIPT := arch/riscv64/elf64lriscv.xe
 
 ARCH_COMPILEFLAGS := -DARCH_RISCV=1
 ARCH_CFLAGS := -march=rv64imafdc -mabi=lp64d -mcmodel=medany
