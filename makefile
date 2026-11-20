@@ -144,6 +144,10 @@ newlib: build-newlib
 clean-newlib:
 	rm -rf -- ./"$(NEWLIB_BUILD_DIR)" ./"$(NEWLIB_INSTALL_DIR)"
 
+# the run list init reads under the harness's -i: TEST_LIST_usertest, one app per line
+TEST_LIST_FILE := $(BUILDDIR)/etc/usertest.list
+FS_LIST += $(TEST_LIST_FILE):etc/usertest.list
+
 FS_LIST_LEFT := $(foreach F,$(FS_LIST),$(firstword $(subst :, ,$(F))))
 FS_LIST_RIGHT := $(foreach F,$(FS_LIST),$(lastword $(subst :, ,$(F))))
 FS_LIST_DIRS := $(filter-out .,$(sort $(patsubst %/,%,$(dir $(FS_LIST_RIGHT)))))
@@ -209,7 +213,10 @@ endif
 # profile starts at boot (LKUSER_BOOT), as name[=code], checked the same way; consoled ends when
 # consoletest:quit tells it to.
 TEST_APPS_COMMON := rawtest:a:b:c calltest boottest posixtest spawntest faulttest=-40 ipctest echoserver& echotest
-TEST_APPS_usertest := $(TEST_APPS_COMMON) consoletest
+# usertest's and direct's apps, which with -i init reads from the image's etc/usertest.list
+# (@usertest.list), past the command line's room; consoled's stay on the command line
+TEST_LIST_usertest := $(TEST_APPS_COMMON) consoletest
+TEST_APPS_usertest = $(if $(filter 1,$(TEST_INIT)),@usertest.list,$(TEST_LIST_usertest))
 TEST_APPS_consoled := $(TEST_APPS_COMMON) consoletest:quit
 # init runs the apps, and the kernel halts once the boot processes are done (the harness's
 # -i); mini's boot process is its test, which the autorun waits for. Under the autorun init
@@ -219,7 +226,7 @@ TEST_INIT_BOOT = $(if $(filter 1,$(TEST_INIT)),init)
 TEST_BOOT_usertest = $(TEST_INIT_BOOT)
 TEST_BOOT_consoled = consoled $(TEST_INIT_BOOT)
 TEST_BOOT_mini := minitest
-TEST_APPS_direct := $(TEST_APPS_usertest)
+TEST_APPS_direct = $(TEST_APPS_usertest)
 TEST_BOOT_direct := init
 TEST_INIT_usertest := 1
 TEST_INIT_consoled := 1
@@ -233,16 +240,24 @@ TEST_TIMEOUT ?= 60
 TEST_SMP ?= 1
 TEST_LOG := $(BUILDDIR)/test-auto$(if $(filter-out usertest,$(PROFILE)),-$(PROFILE)).log
 
+# written only when the list changes, so the images are remade only then
+$(TEST_LIST_FILE): FORCE
+	@$(MKDIR)
+	$(NOECHO)printf '%s\n' $(foreach a,$(TEST_LIST_usertest),'$(a)') >$@.tmp
+	$(NOECHO)if cmp -s $@.tmp $@; then rm -f -- $@.tmp; else mv -- $@.tmp $@; fi
+
 test-auto: _all fs
 	scripts/qemu-test.sh -a $(ARCH) -k build-$(LK_TESTPROJECT)/lk.elf \
-		$(if $(TEST_DISK),-f $(TEST_DISK)) -l $(TEST_LOG) -t $(TEST_TIMEOUT) -s $(TEST_SMP) \
+		$(if $(TEST_DISK),-f $(TEST_DISK)) -d $(ROOT_DIR) -l $(TEST_LOG) -t $(TEST_TIMEOUT) -s $(TEST_SMP) \
 		$(if $(filter 1,$(TEST_INIT)),-i) $(foreach b,$(TEST_BOOT),-b '$(b)') \
 		$(foreach a,$(TEST_APPS),'$(a)')
+
+FORCE:
 
 # every profile's gate in turn
 test-auto-all:
 	$(NOECHO)for p in $(PROFILES); do $(MAKE) --no-print-directory test-auto PROFILE=$$p || exit 1; done
 
-.PHONY: all _all apps fs lk size-table clean clean-apps spotless newlib build-newlib configure-newlib clean-newlib list-toolchain test test-auto test-auto-all
+.PHONY: FORCE all _all apps fs lk size-table clean clean-apps spotless newlib build-newlib configure-newlib clean-newlib list-toolchain test test-auto test-auto-all
 
 # vim: set noexpandtab ts=4 sw=4:

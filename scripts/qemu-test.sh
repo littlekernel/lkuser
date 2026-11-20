@@ -29,14 +29,20 @@
 # power off once the boot processes are gone, printing the objects left. The run then also
 # fails unless that dump lists only kernel endpoints and closed user endpoints.
 #
-# usage: qemu-test.sh -a <arch> -k <lk.elf> [-f <image>] -l <log> [-t <secs>] [-s <smp>] [-i]
-#                     [-b name[=code]]... app...
+# With -i an app may also be @<list>: the file etc/<list> in the image, one app per line
+# (blank lines and lines starting with '#' skipped), which init reads from /init/etc/<list>
+# and runs in order. -d names the directory the image was made from, where the harness reads
+# the same file to check every app in it as if it had been an argument.
+#
+# usage: qemu-test.sh -a <arch> -k <lk.elf> [-f <image>] [-d <dir>] -l <log> [-t <secs>]
+#                     [-s <smp>] [-i] [-b name[=code]]... app...
 
 set -u
 
 arch=
 kernel=
 fsimage=
+rootdir=
 log=
 timeout_secs=60
 smp=1
@@ -44,15 +50,16 @@ boots=()
 by_init=0
 
 usage() {
-    echo "usage: $0 -a <arch> -k <lk.elf> [-f <image>] -l <log> [-t <secs>] [-s <smp>] [-i] [-b name[=code]]... name[:arg...][&][=code]..." >&2
+    echo "usage: $0 -a <arch> -k <lk.elf> [-f <image>] [-d <dir>] -l <log> [-t <secs>] [-s <smp>] [-i] [-b name[=code]]... {name[:arg...][&][=code] | @list}..." >&2
     exit 2
 }
 
-while getopts "a:k:f:l:t:s:b:i" opt; do
+while getopts "a:k:f:d:l:t:s:b:i" opt; do
     case $opt in
         a) arch=$OPTARG ;;
         k) kernel=$OPTARG ;;
         f) fsimage=$OPTARG ;;
+        d) rootdir=$OPTARG ;;
         l) log=$OPTARG ;;
         t) timeout_secs=$OPTARG ;;
         s) smp=$OPTARG ;;
@@ -68,9 +75,13 @@ names=()
 codes=()
 backgrounds=()
 any_background=0
-for app in "${apps[@]}"; do
+# what init is given on the command line: each app's spec, or @/init/etc/<list>
+init_args=()
+
+# one app, name[:arg...][&][=code], onto the lists the checks read
+add_app() {
+    local app=$1 spec code=0 background=0
     spec=${app%%=*}
-    code=0
     if [[ $app == *=* ]]; then
         code=${app#*=}
     fi
@@ -78,7 +89,6 @@ for app in "${apps[@]}"; do
         echo "$0: '$app': the expected exit code must be a number" >&2
         exit 2
     fi
-    background=0
     if [[ $spec == *'&' ]]; then
         spec=${spec%'&'}
         background=1
@@ -88,6 +98,35 @@ for app in "${apps[@]}"; do
     names+=("${spec%%:*}")
     codes+=("$code")
     backgrounds+=("$background")
+}
+
+for app in "${apps[@]}"; do
+    if [[ $app != @* ]]; then
+        add_app "$app"
+        init_args+=("${specs[-1]}$([ "${backgrounds[-1]}" = 1 ] && echo '&')")
+        continue
+    fi
+    list=${app#@}
+    if [ $by_init = 0 ]; then
+        echo "$0: '$app': a list needs -i (init reads it; the autorun cannot)" >&2
+        exit 2
+    fi
+    if [ -z "$rootdir" ] || [ ! -f "$rootdir/etc/$list" ]; then
+        echo "$0: '$app': no ${rootdir:-<-d dir>}/etc/$list to check it against" >&2
+        exit 2
+    fi
+    while IFS= read -r line || [ -n "$line" ]; do
+        line=${line%$'\r'}
+        if [[ $line =~ ^[[:space:]]*$ ]] || [[ $line == '#'* ]]; then
+            continue
+        fi
+        if [[ $line == @* ]]; then
+            echo "$0: '$app': a list inside the list ($line)" >&2
+            exit 2
+        fi
+        add_app "$line"
+    done <"$rootdir/etc/$list"
+    init_args+=("@/init/etc/$list")
 done
 # boot processes are checked as apps are, after them in the lists
 for boot in "${boots[@]}"; do
@@ -136,11 +175,8 @@ done
 if [ $by_init = 1 ]; then
     cmdline="lkuser.halt"
     init=
-    for i in "${!specs[@]}"; do
-        init+="${init:++}${specs[$i]}"
-        if [ "${backgrounds[$i]}" = 1 ]; then
-            init+="&"
-        fi
+    for a in "${init_args[@]}"; do
+        init+="${init:++}$a"
     done
     if [ -n "$init" ]; then
         cmdline+=" lkuser.init=$init"
