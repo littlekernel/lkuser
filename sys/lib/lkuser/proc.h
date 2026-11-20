@@ -100,6 +100,11 @@ public:
 
     uint32_t pid() const { return pid_; }
     const char *name() const { return name_; }
+    // the main thread's stack, [main_stack(), main_stack() + kMainStackSize), and its tid; set
+    // by start() before the thread runs
+    vaddr_t main_stack() const { return main_stack_; }
+    uint32_t main_tid() const { return main_tid_; }
+    static constexpr size_t kMainStackSize = 64 * 1024;
     vmm_aspace_t *aspace() const { return aspace_; }
     handle_table &handles() { return handles_; }
 
@@ -141,6 +146,9 @@ private:
     // the startup block until start() copies it out
     uint8_t *args_ = nullptr;
     size_t args_len_ = 0;
+
+    vaddr_t main_stack_ = 0;
+    uint32_t main_tid_ = 0;
 
     // guards everything below
     Mutex lock_;

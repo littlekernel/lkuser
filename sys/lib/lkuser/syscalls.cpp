@@ -118,6 +118,15 @@ long dispatch(ulong num, const ulong *regs) {
     }
 }
 
+// After a fault's registers: the thread, whether it is its process's main thread, and the
+// main stack's range, so an sp outside it shows.
+void print_fault_thread(thread *t, proc *p) {
+    const vaddr_t base = p->main_stack();
+    printf("lkuser:   thread %u (%s), main stack %#lx-%#lx\n", t->tid(),
+           t->tid() == p->main_tid() ? "the main thread" : "not the main thread",
+           (unsigned long)base, (unsigned long)(base + proc::kMainStackSize));
+}
+
 } // namespace
 
 } // namespace lkuser
@@ -161,6 +170,24 @@ extern "C" void riscv_user_exception(long cause, ulong epc, struct riscv_short_i
     lkuser::proc *p = t->process();
     printf("lkuser: process %u (%s) faulted: cause %ld, epc %#lx, tval %#lx\n", p->pid(),
            p->name(), cause, epc, tval);
+    // the short frame is all of the user's registers it holds
+#if __riscv_xlen == 64
+#define R "%016lx"
+#else
+#define R "%08lx"
+#endif
+    printf("lkuser:   ra " R " sp " R " gp " R " tp " R "\n", frame->ra, frame->sp, frame->gp,
+           frame->tp);
+    printf("lkuser:   s0 " R " status " R "\n", frame->s0, frame->status);
+    printf("lkuser:   a0 " R " a1 " R " a2 " R " a3 " R "\n", frame->a0, frame->a1, frame->a2,
+           frame->a3);
+    printf("lkuser:   a4 " R " a5 " R " a6 " R " a7 " R "\n", frame->a4, frame->a5, frame->a6,
+           frame->a7);
+    printf("lkuser:   t0 " R " t1 " R " t2 " R " t3 " R "\n", frame->t0, frame->t1, frame->t2,
+           frame->t3);
+    printf("lkuser:   t4 " R " t5 " R " t6 " R "\n", frame->t4, frame->t5, frame->t6);
+#undef R
+    lkuser::print_fault_thread(t, p);
 
     // exit takes mutexes, as the syscall path does
     arch_enable_ints();
@@ -218,6 +245,15 @@ extern "C" void arm64_user_exception(struct arm64_iframe_long *iframe, uint32_t 
     lkuser::proc *p = t->process();
     printf("lkuser: process %u (%s) faulted: esr %#x, elr %#llx, far %#llx\n", p->pid(),
            p->name(), esr, iframe->elr, far);
+    for (int i = 0; i < 28; i += 4) {
+        printf("lkuser:   x%-2d %016llx x%-2d %016llx x%-2d %016llx x%-2d %016llx\n", i,
+               iframe->r[i], i + 1, iframe->r[i + 1], i + 2, iframe->r[i + 2], i + 3,
+               iframe->r[i + 3]);
+    }
+    printf("lkuser:   x28 %016llx x29 %016llx lr  %016llx sp  %016llx\n", iframe->r[28],
+           iframe->r[29], iframe->lr, iframe->usp);
+    printf("lkuser:   spsr %016llx\n", iframe->spsr);
+    lkuser::print_fault_thread(t, p);
 
     // exit takes mutexes, as the syscall path does
     arch_enable_ints();

@@ -44,9 +44,8 @@ namespace lkuser {
 
 namespace {
 
-constexpr size_t kMainStackSize = 64 * 1024;
 // the startup block may take a quarter of the main stack
-constexpr size_t kMaxArgsSize = kMainStackSize / 4;
+constexpr size_t kMaxArgsSize = proc::kMainStackSize / 4;
 
 // started processes that are not yet reaped; each holds a reference
 lk::list<proc> proc_list;
@@ -228,6 +227,8 @@ status_t proc::start(vaddr_t entry) {
         }
         // nothing fails past here: a created LK thread has to run
         free_stack.cancel();
+        main_stack_ = (vaddr_t)stack;
+        main_tid_ = t->tid();
         state_ = state::RUNNING;
         live_threads_ = 1;
         t->add_ref();
