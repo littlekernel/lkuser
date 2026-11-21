@@ -12,11 +12,13 @@
 // the arguments after the name and a dup of every handle init was born with, under the same
 // tag. An app runs to its end before the next one starts, unless it ends in '&', when it runs
 // on while the ones after it do; init waits for every one. An argument @<path> is a list: a
-// file read through the namespace a line at a time, each line an app as above, cut at its
-// first '=' (the harness's expected code), blank lines and lines starting with '#' skipped.
-// An app that cannot be spawned, or a list that cannot be read, prints an INIT: FAIL line and
-// the rest still run. Exits 0 after INIT: PASS, or 1. No libc; it prints through debug_write,
-// so it never calls the console it hands down.
+// file read through the namespace a line at a time. A line loses its trailing spaces, tabs
+// and CRs; one left empty or starting with '#' is skipped, and any other is an app as above,
+// cut at its first '=' (the harness's expected code), at most SPEC_MAX - 1 bytes; qemu-test.sh
+// reads a list by the same rule. An app that cannot be spawned, or a list that cannot be
+// read, prints an INIT: FAIL line and the rest still run (a list stops at a read error).
+// Exits 0 after INIT: PASS, or 1. No libc; it prints through debug_write, so it never calls
+// the console it hands down.
 
 #define TEST_NAME "INIT"
 #include <lk/services.h>
@@ -48,7 +50,7 @@ static void put_fail(const char *what, const char *app, lk_status_t err) {
     test_failures++;
 }
 
-// Spawns the app spec names (cut up in place); *background says whether it ended in '&'.
+// Spawns the app spec names (cut up in place); *in_background says whether it ended in '&'.
 static lk_status_t spawn_app(char *spec, bool *in_background, lk_handle_t *child) {
     size_t len = test_strlen(spec);
     *in_background = len > 0 && spec[len - 1] == '&';
@@ -117,24 +119,51 @@ static void run_entry(const char *entry) {
     lk_handle_close(child);
 }
 
-// One line of a list, NUL-terminated in place: cut at its '=', trailing blanks dropped.
-static void run_line(char *line, const char *path) {
-    size_t len = 0;
-    while (line[len] && line[len] != '=') {
-        len++;
+// A line of a list as it is read: every byte is counted, those that fit are kept, and end
+// is just past the last one that is not a space, tab or CR, so a trailing run of them drops.
+struct list_line {
+    char buf[SPEC_MAX];
+    size_t len;
+    size_t end;
+    bool too_long;
+};
+
+static void line_add(struct list_line *l, char c) {
+    const size_t at = l->len++;
+    if (at < sizeof(l->buf) - 1) {
+        l->buf[at] = c;
     }
-    while (len > 0 && (line[len - 1] == ' ' || line[len - 1] == '\t' || line[len - 1] == '\r')) {
-        len--;
+    if (c != ' ' && c != '\t' && c != '\r') {
+        if (at < sizeof(l->buf) - 1) {
+            l->end = at + 1;
+        } else {
+            l->too_long = true;
+        }
     }
-    line[len] = '\0';
-    if (len == 0 || line[0] == '#') {
-        return;
+}
+
+// At the line's newline, or the end of the file: runs it unless it is blank or a comment.
+static void line_end(struct list_line *l, const char *path) {
+    l->buf[l->end] = '\0';
+    const bool blank = l->end == 0 && !l->too_long;
+    if (!blank && l->buf[0] != '#') {
+        if (l->too_long) {
+            put_fail("app too long in", path, ERR_TOO_BIG);
+        } else if (l->buf[0] == '@') {
+            put_fail("a list inside the list", path, ERR_NOT_SUPPORTED);
+        } else {
+            for (char *c = l->buf; *c; c++) {
+                if (*c == '=') {
+                    *c = '\0';
+                    break;
+                }
+            }
+            run_entry(l->buf);
+        }
     }
-    if (line[0] == '@') {
-        put_fail("a list inside the list", path, ERR_NOT_SUPPORTED);
-        return;
-    }
-    run_entry(line);
+    l->len = 0;
+    l->end = 0;
+    l->too_long = false;
 }
 
 // Runs the list at path, a line at a time, so it may be any length.
@@ -150,46 +179,33 @@ static void run_list(const char *path) {
         return;
     }
     char buf[256];
-    char line[SPEC_MAX];
-    size_t len = 0;
-    bool too_long = false;
+    struct list_line line;
+    line.len = 0;
+    line.end = 0;
+    line.too_long = false;
     for (uint64_t off = 0;;) {
         size_t n;
         err = lk_file_read(f, off, buf, sizeof(buf), &n);
         if (err < 0) {
+            // the line read so far may be cut short: it does not run
             put_fail("reading", path, err);
-            break;
-        }
-        for (size_t i = 0; i < n; i++) {
-            if (buf[i] != '\n') {
-                if (len < sizeof(line) - 1) {
-                    line[len++] = buf[i];
-                } else {
-                    too_long = true;
-                }
-                continue;
-            }
-            line[len] = '\0';
-            if (too_long) {
-                put_fail("app too long in", path, ERR_TOO_BIG);
-            } else {
-                run_line(line, path);
-            }
-            len = 0;
-            too_long = false;
+            lk_handle_close(f);
+            return;
         }
         if (n == 0) {
             break;
         }
+        for (size_t i = 0; i < n; i++) {
+            if (buf[i] == '\n') {
+                line_end(&line, path);
+            } else {
+                line_add(&line, buf[i]);
+            }
+        }
         off += n;
     }
     // a last line with no newline
-    line[len] = '\0';
-    if (too_long) {
-        put_fail("app too long in", path, ERR_TOO_BIG);
-    } else {
-        run_line(line, path);
-    }
+    line_end(&line, path);
     lk_handle_close(f);
 }
 

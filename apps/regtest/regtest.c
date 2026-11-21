@@ -8,11 +8,12 @@
 
 // The registers a thread owns: the thread pointer (tp on riscv, tpidr_el0 on arm64) and the
 // FP registers (none on riscv32, rv32imac). The main thread and every new one are born with
-// them zero. Eight threads, and as many again in a copy of this program (argv[0] regchild),
-// each put values of their own in them and check them after a spin long enough to be
-// preempted, a sleep and a console call: the callee-saved FP registers (fs0-fs11, d8-d15)
-// across all of it, a caller-saved one (ft0, d16) only across a spin with no call in it.
-// Prints REGTEST: PASS. No libc: it starts threads.
+// them zero: all 32 FP registers (the whole of v0-v31 on arm64) and fcsr, or fpcr and fpsr.
+// Eight threads, and as many again in a copy of this program (argv[0] regchild), each put
+// values of their own in the thread pointer and some FP registers and check them after a
+// spin long enough to be preempted, a sleep and a console call: the callee-saved FP
+// registers (fs0-fs11, d8-d15) across all of it, a caller-saved one (ft0, d16) only across a
+// spin with no call in it. Prints REGTEST: PASS. No libc: it starts threads.
 
 #define TEST_NAME "REGTEST"
 #include <lk/services.h>
@@ -52,6 +53,17 @@ static int failures[NTHREADS + 1];
 #define FP_WRITE(r, clob, v) __asm__ volatile("fmov " r ", %x0" ::"r"(v) : clob)
 #define FP_READ(r, v) __asm__ volatile("fmov %x0, " r : "=r"(v))
 #define SCRATCH_FP "d16"
+// every FP register into regs, v0-v31 whole, two words each
+#define FP_REG_NAME "v"
+#define FP_REG_WORDS 2
+#define FP_DUMP(regs)                                                                \
+    __asm__ volatile(".irp n,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,"                 \
+                     "16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31\n"             \
+                     "str q\\n, [%0, #\\n*16]\n"                                     \
+                     ".endr\n" ::"r"(regs)                                           \
+                     : "memory")
+#define FP_CSRS(X)                                                                   \
+    X("fpcr", "mrs %0, fpcr") X("fpsr", "mrs %0, fpsr")
 // writes d16, spins n times with no call, reads d16 back
 #define SPIN_HOLDING(n, v, out)                                                      \
     __asm__ volatile("fmov d16, %x2\n"                                               \
@@ -75,6 +87,16 @@ static int failures[NTHREADS + 1];
 #define FP_WRITE(r, clob, v) __asm__ volatile("fmv.d.x " r ", %0" ::"r"(v) : clob)
 #define FP_READ(r, v) __asm__ volatile("fmv.x.d %0, " r : "=r"(v))
 #define SCRATCH_FP "ft0"
+// every FP register into regs, f0-f31
+#define FP_REG_NAME "f"
+#define FP_REG_WORDS 1
+#define FP_DUMP(regs)                                                                \
+    __asm__ volatile(".irp n,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,"                 \
+                     "16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31\n"             \
+                     "fsd f\\n, \\n*8(%0)\n"                                         \
+                     ".endr\n" ::"r"(regs)                                           \
+                     : "memory")
+#define FP_CSRS(X) X("fcsr", "frcsr %0")
 #define SPIN_HOLDING(n, v, out)                                                      \
     __asm__ volatile("fmv.d.x ft0, %2\n"                                             \
                      "1: addi %0, %0, -1\n"                                          \
@@ -135,6 +157,22 @@ static void born_nonzero(int t, const char *reg, uint64_t got) {
     failures[t]++;
 }
 
+#if HAVE_FP
+// word is the register's 64-bit half on arm64, where each holds two
+static void born_fp_nonzero(int t, int reg, int word, uint64_t got) {
+    put_thread(t);
+    test_put(" born with " FP_REG_NAME);
+    test_put_dec(reg);
+    if (FP_REG_WORDS > 1) {
+        test_put(word ? " (high half)" : " (low half)");
+    }
+    test_put(" = ");
+    put_hex(got);
+    test_put("\n");
+    failures[t]++;
+}
+#endif
+
 static void mismatch(int t, int round, const char *reg, const char *after, uint64_t got,
                      uint64_t want) {
     put_thread(t);
@@ -166,8 +204,9 @@ static uint64_t value(int t, int round, int reg) {
 #define REG_TP NSAVED
 #define REG_SCRATCH (NSAVED + 1)
 
-// What a thread is born with: the thread pointer and every FP register zero. Inline, so the
-// registers are read before anything of the thread's own has run.
+// What a thread is born with: the thread pointer, every FP register and the FP control and
+// status registers zero. Inline, so the registers are read before anything of the thread's
+// own has run.
 #define CHECK_BORN(t)                                                                   \
     do {                                                                                \
         uintptr_t tp_;                                                                  \
@@ -179,30 +218,26 @@ static uint64_t value(int t, int round, int reg) {
     } while (0)
 
 #if HAVE_FP
-#define BORN_ONE(i, r, clob)                                                            \
+#define BORN_CSR(name, insn)                                                            \
     {                                                                                   \
         uint64_t v_;                                                                    \
-        FP_READ(r, v_);                                                                 \
+        __asm__ volatile(insn : "=r"(v_));                                              \
         if (v_ != 0) {                                                                  \
-            born_nonzero(t_, r, v_);                                                    \
+            born_nonzero(t_, name, v_);                                                 \
         }                                                                               \
     }
 #define CHECK_BORN_FP(t)                                                                \
     do {                                                                                \
         const int t_ = (t);                                                             \
-        uint64_t s_;                                                                    \
-        __asm__ volatile(                                                               \
-            HAVE_SCRATCH_READ : "=r"(s_));                                              \
-        if (s_ != 0) {                                                                  \
-            born_nonzero(t_, SCRATCH_FP, s_);                                           \
+        uint64_t regs_[32 * FP_REG_WORDS] __attribute__((aligned(16)));                 \
+        FP_DUMP(regs_);                                                                 \
+        FP_CSRS(BORN_CSR)                                                               \
+        for (int i_ = 0; i_ < 32 * FP_REG_WORDS; i_++) {                                \
+            if (regs_[i_] != 0) {                                                       \
+                born_fp_nonzero(t_, i_ / FP_REG_WORDS, i_ % FP_REG_WORDS, regs_[i_]);   \
+            }                                                                           \
         }                                                                               \
-        SAVED_FP(BORN_ONE)                                                              \
     } while (0)
-#if defined(__aarch64__)
-#define HAVE_SCRATCH_READ "fmov %x0, d16"
-#else
-#define HAVE_SCRATCH_READ "fmv.x.d %0, ft0"
-#endif
 #define WRITE_ONE(i, r, clob) FP_WRITE(r, clob, value(t, round, i));
 #define CHECK_ONE(i, r, clob)                                                           \
     {                                                                                   \
@@ -338,12 +373,17 @@ void _start_c(const struct lk_proc_args *args) {
         WRITE_ALL();
     }
     lk_handle_t threads[NTHREADS];
-    for (int i = 0; i < NTHREADS; i++) {
-        CHECK_EQ(lk_thread_start(process_h, run_thread, (void *)(uintptr_t)i, stacks[i],
-                                 sizeof(stacks[i]), &threads[i]),
-                 NO_ERROR);
+    int started = 0;
+    for (; started < NTHREADS; started++) {
+        const lk_status_t err = lk_thread_start(process_h, run_thread, (void *)(uintptr_t)started,
+                                                stacks[started], sizeof(stacks[started]),
+                                                &threads[started]);
+        CHECK_EQ(err, NO_ERROR);
+        if (err < 0) {
+            break;
+        }
     }
-    for (int i = 0; i < NTHREADS; i++) {
+    for (int i = 0; i < started; i++) {
         CHECK_EQ(lk_wait_one(threads[i], LK_SIGNAL_TERMINATED, LK_TIME_INFINITE, NULL),
                  NO_ERROR);
         lk_handle_close(threads[i]);

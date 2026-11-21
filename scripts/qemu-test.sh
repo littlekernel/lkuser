@@ -29,10 +29,12 @@
 # power off once the boot processes are gone, printing the objects left. The run then also
 # fails unless that dump lists only kernel endpoints and closed user endpoints.
 #
-# With -i an app may also be @<list>: the file etc/<list> in the image, one app per line
-# (blank lines and lines starting with '#' skipped), which init reads from /init/etc/<list>
-# and runs in order. -d names the directory the image was made from, where the harness reads
-# the same file to check every app in it as if it had been an argument.
+# With -i an app may also be @<list>: the file etc/<list> in the image, one app per line,
+# which init reads from /init/etc/<list> and runs in order. Both read a line the same way:
+# trailing spaces, tabs and CRs dropped, then skipped if empty or starting with '#', else an
+# app of at most 127 bytes (init's SPEC_MAX - 1). -d names the directory the image was made
+# from, where the harness reads the same file to check every app in it as if it had been an
+# argument.
 #
 # usage: qemu-test.sh -a <arch> -k <lk.elf> [-f <image>] [-d <dir>] -l <log> [-t <secs>]
 #                     [-s <smp>] [-i] [-b name[=code]]... app...
@@ -94,6 +96,10 @@ add_app() {
         background=1
         any_background=1
     fi
+    if [ -z "${spec%%:*}" ]; then
+        echo "$0: '$app': no app name" >&2
+        exit 2
+    fi
     specs+=("$spec")
     names+=("${spec%%:*}")
     codes+=("$code")
@@ -116,9 +122,15 @@ for app in "${apps[@]}"; do
         exit 2
     fi
     while IFS= read -r line || [ -n "$line" ]; do
-        line=${line%$'\r'}
-        if [[ $line =~ ^[[:space:]]*$ ]] || [[ $line == '#'* ]]; then
+        while [[ $line == *[$' \t\r'] ]]; do
+            line=${line%?}
+        done
+        if [ -z "$line" ] || [[ $line == '#'* ]]; then
             continue
+        fi
+        if [ ${#line} -gt 127 ]; then
+            echo "$0: '$app': a line over init's 127 bytes ($line)" >&2
+            exit 2
         fi
         if [[ $line == @* ]]; then
             echo "$0: '$app': a list inside the list ($line)" >&2
